@@ -4,5 +4,5 @@ export * from './card';
 export * from './signal';
 export * from './action';
 export * from './state';
-export * from './filter';
+export * from './expression';
 export * from './effect';

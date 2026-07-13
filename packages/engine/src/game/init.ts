@@ -81,7 +81,7 @@ export function createEmptyGameState(config: GameConfig): GameState {
         activatableEffects: [],
         statusEffects: [],
 
-        actionLog: [],
+        gameLog: [],
 
         winner: null,
         endReason: null

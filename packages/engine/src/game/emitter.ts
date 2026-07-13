@@ -4,8 +4,7 @@ import { getCardDef, getCardInstance, setGameEnd, stageEffectRef } from './mecha
 
 export function emit(state: GameState, signal: GameSignal): GameState {
     state = produce(state, draft => {
-        const lastAction = draft.actionLog.at(-1);
-        if (lastAction) lastAction.signals.push(signal);
+        draft.gameLog.push({ kind: "SIGNAL", signal });
     });
     
     // lethal damage check

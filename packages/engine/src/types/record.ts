@@ -4,10 +4,12 @@ import type { Seed, GameSeeds, PlayerId, EndReason } from './primitives';
 import type { Nonce } from './primitives';
 import { GameSignal } from './signal';
 
-export type ActionRecord = {
-    action: GameAction;
-    signals: GameSignal[];
-}
+// A single entry in the flat, chronological game log.
+// The engine does not consume the log; it is a narration/replay record.
+// The originating action for any entry is the nearest preceding ACTION entry.
+export type LogEntry =
+    | { kind: "ACTION"; action: GameAction }
+    | { kind: "SIGNAL"; signal: GameSignal };
 
 export type SecureGameSeeds = GameSeeds & {
     nonce: Nonce;
@@ -16,7 +18,7 @@ export type SecureGameSeeds = GameSeeds & {
 
 export type GameRecord = {
     seeds: GameSeeds;
-    actionLog: ActionRecord[];
+    gameLog: LogEntry[];
     winner: PlayerId | null;
     endReason: EndReason | null;
     turnCount: number;

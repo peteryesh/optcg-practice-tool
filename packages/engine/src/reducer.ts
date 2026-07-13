@@ -34,7 +34,7 @@ export function reducer(state: GameState, action: GameAction): GameState {
     if (error) throw new InvalidActionError(error);
 
     state = produce(state, draft => {
-        draft.actionLog.push({ action, signals: [] });
+        draft.gameLog.push({ kind: "ACTION", action });
     });
 
     switch (action.type) {

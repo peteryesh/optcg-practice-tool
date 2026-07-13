@@ -2,7 +2,7 @@ import { produce } from 'immer';
 import type { GameState, DecisionPoint } from '../types/state';
 import type { PlayerId } from '../types/primitives';
 import type { EffectStep } from '../types/effect';
-import type { CardFilter } from '../types/filter';
+import type { CardFilter } from '../types/expression';
 
 // REMOVE
 

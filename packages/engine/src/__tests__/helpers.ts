@@ -76,11 +76,12 @@ export function createTestState(
         cardsPlayedThisTurn: [],
         currentBattle: null,
         battlesThisTurn: [],
+        decisionPoint: null,
         currentEffect: null,
         effectQueue: [],
-        decisionPoint: null,
+        stagingFrame: Object.fromEntries(players.map(id => [id, []])),
         statusEffects: [],
-        actionLog: [],
+        gameLog: [],
         winner: null,
         endReason: null,
     };
@@ -103,6 +104,7 @@ export function makeCharacterInstance(
         attachedDon: [],
         playedOnTurns: [],
         effectsUsedThisTurn: {},
+        flipped: false,
     };
 }
 
@@ -136,6 +138,7 @@ export function makeStageInstance(
         attachedDon: [],
         playedOnTurns: [],
         effectsUsedThisTurn: {},
+        flipped: false,
     };
 }
 
@@ -152,6 +155,7 @@ export function makeEventInstance(
         isRested: false,
         playedOnTurns: [],
         effectsUsedThisTurn: {},
+        flipped: false,
     };
 }
 

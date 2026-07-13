@@ -1,8 +1,8 @@
 import type { CardInstanceId, PlayerId, Phase, BattlePhase, EndReason, FrameId, CardId, BattleRecord, MulliganChoice, Zone } from './primitives';
 import type { Card, CardDef, CardInstance } from './card';
 import type { Seed, Nonce } from '../rng/seeds';
-import { EffectId, Effect, EffectFrame, EffectDef, StatusEffectDef } from './effect';
-import { ActionRecord } from './record';
+import { EffectId, EffectFrame, EffectDef, StatusEffectDef, EffectContext } from './effect';
+import { LogEntry } from './record';
 
 export type DecisionPoint =
     | { type: 'SELECT_FIRST_PLAYER'; player: PlayerId }
@@ -66,7 +66,7 @@ export interface GameState {
     // Pregame setup
     setup: SetupState; // Holds coin flip result and mulligan decisions
 
-    actionLog: ActionRecord[]; // History of actions and signals
+    gameLog: LogEntry[]; // Flat chronological history of actions and signals
 
     // Game board
     definitions: Record<CardId, CardDef>; // card definitions, loaded at game start and immutable
@@ -89,7 +89,7 @@ export interface GameState {
     decisionPoint: DecisionPoint | null; // Set when player decision is required to advance game state
 
     // Effects
-    currentEffect: Effect | null;  // the currently resolving effect, if any
+    currentEffect: EffectContext | null;  // the currently resolving effect, if any
     effectQueue: EffectFrame[];
     stagingFrame: EffectFrame;
 

@@ -1,6 +1,6 @@
 import type { CardInstanceId, PlayerId, Zone, Keyword, StackPosition, CardId, LifeOrientation } from './primitives';
 import type { SignalType } from './signal';
-import type { CardFilter, BoardCondition, AmountExpression, TargetExpression } from './filter';
+import type { CardFilter, BoardCondition, AmountExpression, TargetExpression } from './expression';
 
 export type EffectId = string;
 
@@ -24,7 +24,8 @@ export type EffectContext = {
     cost?: EffectCost;
     optional: boolean;
     cursor: number;
-    steps: (EffectStep | ConditionStep)[];
+    locals: Record<string, any>;
+    steps: EffectStep[];
 }
 
 export type EffectFrame = Record<PlayerId, EffectRef[]>;
@@ -35,15 +36,31 @@ export type EffectRef = {
     instanceId: CardInstanceId; // instance that activated the effect
 }
 
-interface EffectStep {
-    condition?: BoardCondition;
-    operation: EffectOperation;
+export type EffectStep =
+    | RequirementStep
+    | PaymentStep
+    | ResolutionStep;
+
+// Requirement step is a conditional check on board condition
+// Requirement step preceding a payment step should check for the ability to pay the cost
+interface RequirementStep {
+    requirement: BoardCondition;
+    checkpoint?: true;
 }
 
-interface ConditionStep {
-    condition: BoardCondition;
+// Payment must always be preceded by requirement
+// Payment step is a cost that must be paid to activate the effect, if it fails, the effect is aborted
+// Cost does not require a check because it should already have been checked in the requirement step
+interface PaymentStep {
     cost?: EffectCost;
-    goto?: number;
+    checkpoint?: true;
+}
+
+// Step to resolve the effect post requirement and payment, if any
+// Contains the actual functionality of the effect
+interface ResolutionStep {
+    operation: EffectOperation;
+    checkpoint?: true;
 }
 
 type EffectOperation =
@@ -61,6 +78,7 @@ export type EffectCost =
     | { kind: "LIFE_TO_HAND"; amount: AmountExpression; lifePos: StackPosition }
     | { kind: "LIFE_TRASH"; amount: AmountExpression; lifePos: StackPosition }
     | { kind: "LIFE_FLIP"; amount: AmountExpression; lifePos: StackPosition; orientation: LifeOrientation }
+
 
 // Status Effects
 export type StatusEffectDef = {

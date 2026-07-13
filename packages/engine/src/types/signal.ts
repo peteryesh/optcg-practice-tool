@@ -1,4 +1,4 @@
-import { CardFilter } from './filter';
+import { CardFilter } from './expression';
 import type { CardId, CardInstanceId, Attribute, CardClass, Color, PlayerId, Zone, EndReason, StackPosition, RevealedTo, Phase, BattleRecord } from './primitives';
 
 // ============================================================
