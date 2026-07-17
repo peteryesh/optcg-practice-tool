@@ -8,8 +8,8 @@
  * Overall, there needs to be a way to get full context for the filter, and it is not always effect context
  */
 
-import { getCardDef, getCardInstance } from "./game/mechanics";
-import { CardFilter, CardDef, CardInstanceId, EvalContext, GameState, PlayerId } from "./types";
+import { getCardDef, getCardInstance, getZoneArray } from "./game/mechanics";
+import { CardFilter, CardDef, CardInstanceId, EvalContext, GameState, PlayerId, BoardCondition, AmountExpression } from "./types";
 
 export function evalCardFilter(state: GameState, evalContext: EvalContext, candidateId: CardInstanceId, filter: CardFilter): boolean {
     const candidate = getCardInstance(state, candidateId);
@@ -90,6 +90,34 @@ export function evalCardFilter(state: GameState, evalContext: EvalContext, candi
             return filter.filters.some(f => evalCardFilter(state, evalContext, candidateId, f));
         case "NOT":
             return !evalCardFilter(state, evalContext, candidateId, filter.filter);
+    }
+}
+
+export function evalAmountExpression(state: GameState, evalContext: EvalContext, expression: AmountExpression): number {
+    switch (expression.kind) {
+        case "LITERAL":
+            return expression.value;
+        case "COUNT":
+            // return number of cards in zones that match filter
+            let count = 0;
+            for (const playerId of Object.keys(state.playerZones)) {
+                for (const zone of expression.zones) {
+                    for (const cardId of getZoneArray(state, playerId as PlayerId, zone)) {
+                        if (evalCardFilter(state, evalContext, cardId, expression.filter)) {
+                            count++;
+                        }
+                    }
+                }
+            }
+            return count;
+        case "ADD":
+            return evalAmountExpression(state, evalContext, expression.left) + evalAmountExpression(state, evalContext, expression.right);
+        case "SUBTRACT":
+            return evalAmountExpression(state, evalContext, expression.left) - evalAmountExpression(state, evalContext, expression.right);
+        case "MULTIPLY":
+            return evalAmountExpression(state, evalContext, expression.left) * evalAmountExpression(state, evalContext, expression.right);
+        default:
+            throw new Error(`Unknown AmountExpression kind: ${(expression as any).kind}`);
     }
 }
 

@@ -66,6 +66,3 @@ describe("MULTIPLY", () => {
         // count as left, literal as right
     });
 });
-
-// Unsure what this is supposed to represent right now
-it.todo("RANGE", () => {});
