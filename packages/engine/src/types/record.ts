@@ -1,7 +1,8 @@
 import type { GameAction } from './action';
 import type { GameState } from './state';
-import type { Seed, GameSeeds, PlayerId, EndReason } from './primitives';
-import type { Nonce } from './primitives';
+import type { PlayerId, EndReason } from './primitives';
+import type { GameSeeds } from './state';
+import type { Nonce } from '../rng/seeds';
 import { GameSignal } from './signal';
 
 // A single entry in the flat, chronological game log.

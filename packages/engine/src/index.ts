@@ -7,7 +7,7 @@ export * from './types/card';
 export * from './types/signal';
 export * from './types/action';
 export * from './types/state';
-export * from './types/filter';
+export * from './types/expression';
 export * from './types/effect';
 
 // // RNG

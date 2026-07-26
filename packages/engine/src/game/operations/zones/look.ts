@@ -1,4 +1,4 @@
-import type { GameState, PlayerId, SignalCause, DamageCause, CardInstanceId, DonInstance, StackPosition, Zone } from "../../../types";
+import type { GameState, PlayerId, SignalCause, CardInstanceId, DonInstance, StackPosition, Zone } from "../../../types";
 import { moveCard, getZoneArray, attachDon, detachDon, getCardInstance } from "../../mechanics";
 import { emit } from "../../emitter";
 import { InvalidActionError } from "../../../errors";

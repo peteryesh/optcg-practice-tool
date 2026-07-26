@@ -1,5 +1,5 @@
 import { produce } from "immer";
-import { CardInstanceId, Effect, EffectDef, EffectId, EffectRef, GameState, PlayerId } from "../../types";
+import { CardInstanceId, EffectContext, EffectDef, EffectId, EffectRef, GameState, PlayerId } from "../../types";
 import { getCardDef, getCardInstance } from "./helpers";
 
 export function stageEffectRef(state: GameState, playerId: PlayerId, instanceId: CardInstanceId, effectId: EffectId): GameState {
@@ -42,14 +42,27 @@ export function promoteEffect(state: GameState, effectRef: EffectRef): GameState
     });
 }
 
-function buildCurrentEffect(state: GameState, effectRef: EffectRef, effectDef: EffectDef): Effect {
+export function clearCurrentEffect(state: GameState): GameState {
+    return produce(state, draft => {
+        draft.currentEffect = null;
+    });
+}
+
+export function advanceEffectCursor(state: GameState): GameState {
+    return produce(state, draft => {
+        if (!draft.currentEffect) throw new Error(`Cannot advance the cursor with no current effect`);
+        draft.currentEffect.cursor += 1;
+    });
+}
+
+function buildCurrentEffect(state: GameState, effectRef: EffectRef, effectDef: EffectDef): EffectContext {
     return {
         playerId: getCardInstance(state, effectRef.instanceId).controller,
         effectId: effectRef.effectId,
         instanceId: effectRef.instanceId,
         condition: effectDef.condition,
-        cost: effectDef.cost,
-        optional: effectDef.optional,
-        steps: effectDef.steps
+        steps: effectDef.steps,
+        cursor: 0,
+        locals: {}
     }
 }

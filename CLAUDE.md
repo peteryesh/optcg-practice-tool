@@ -51,8 +51,10 @@ action log.
    `decisionPoint`, then calls `advance`.
 2. `advance` ([conductor.ts](packages/engine/src/conductor.ts)) repeatedly calls
    `step` until the game reaches a `decisionPoint` (needs player input) or a
-   `winner`. `step` drives triggers, effect resolution, and phase transitions off
-   `state.phase`.
+   `winner`. `step` drives effect staging/promotion, the Trigger mechanic, and
+   phase transitions off `state.phase`. (Stepping a *promoted* effect through its
+   `EffectStep`s is the current WIP hole — the `currentEffect` branch in `step` is
+   still empty; see Work-in-progress notes.)
 
 So game progression is a pump: apply one player action, then auto-advance through
 all forced state changes until the next decision is required. A `DecisionPoint`
@@ -92,25 +94,63 @@ submodules.
 
 - [emitter.ts](packages/engine/src/game/emitter.ts) — `emit(state, signal)` logs
   the signal, checks win conditions (lethal damage → `KNOCKOUT`, empty deck →
-  `DECKOUT`), and stages any card effects that listen for that `SignalType`.
+  `DECKOUT`), and stages the card effects whose activation lists that `SignalType`.
+  Staging is currently signal-type match only — activation conditions, active-zone,
+  and once-per-turn gating are not yet applied.
 - Effects are data-driven. A card definition holds `EffectDef`s
-  (`src/types/effect.ts`); an activated effect becomes an `EffectRef` (staged),
-  then an `EffectContext` (`currentEffect`) that the conductor steps through as a
-  list of `EffectStep`s (requirement → payment → resolution).
+  (`src/types/effect.ts`); an activated effect becomes an `EffectRef` (staged into
+  `stagingFrame`, committed to `effectQueue`), then is promoted to an
+  `EffectContext` (`currentEffect`). The conductor is *intended* to step that
+  through its `EffectStep`s (requirement → payment → resolution), but that stepping
+  is not yet implemented.
 - Effect logic is expressed with a small DSL in
   [types/expression.ts](packages/engine/src/types/expression.ts) — `CardFilter`,
   `AmountExpression`, `BoardCondition`, `TargetExpression` — evaluated by
   [evaluator.ts](packages/engine/src/evaluator.ts) against an `EvalContext`
-  (`{ self, source }`).
+  (`{ self, source }`). Only `CardFilter` and `AmountExpression` are evaluated so
+  far; `BoardCondition` and `TargetExpression` are defined but have no evaluator yet.
+- `EffectDef.condition` is the **activation gate** — the board check for whether the
+  effect can be activated/paid at all. It is checked at staging/promotion and is
+  carried onto the `EffectContext`; it is not a step. Conditionals that apply
+  *mid*-resolution are `RequirementStep`s instead.
+- **Effect operations and costs never name a player.** No `EffectOperation` /
+  `EffectCost` carries a `PlayerId`. Who acts is derived from the expressions:
+  `EvalContext.self` is the controller of the card whose effect activated, `source`
+  is that card. `DRAW` draws for `self`; an effect that makes the *opponent* act
+  expresses that through its filters/target expression.
+
+### Naming conventions
+
+- **"trigger" is a reserved term.** It refers *only* to the OPTCG Trigger mechanic
+  (the effect on a card dealt from life as damage — the `trigger` zone, the
+  `TRIGGER` decision point, `CARD_SENT_TO_TRIGGER`). Never use
+  "trigger"/`triggers`/`TRIGGERED` for general effect activation; use neutral terms
+  (activation, listener, signal) instead.
 
 ### Work-in-progress notes
 
 The effect system is mid-migration to the expression/DSL model. Expect stubs:
-`ACTIVATE_EFFECT`, `CHOOSE_NEXT_EFFECT`, `CHOOSE_TARGETS`, and blocker handling
-return "not yet implemented". [game/effects.ts](packages/engine/src/game/effects.ts)
-is marked `REMOVE` and references an older shape (`pendingEffects`,
-`EffectSequence`) that no longer matches the types — do not model new code on it;
-use `conductor.ts` + the current `EffectContext`/`EffectStep` types instead.
+`ACTIVATE_EFFECT`, `CHOOSE_NEXT_EFFECT`, and `CHOOSE_TARGETS` return "not yet
+implemented" (in validator/reducer/apply). Also unwritten: the `currentEffect`
+stepper in `conductor.ts`, and `evalBoardCondition`/`evalTargetExpression` in the
+evaluator.
+
+**Signal emission ordering is deliberately inconsistent in three places.** The
+convention is mutate-then-emit, and everything follows it except:
+
+- `_removeCardFromField` ([cards.ts:193](packages/engine/src/game/operations/cards.ts#L193))
+  — `CARD_REMOVED_FROM_FIELD` fires before `moveCard`, and after the DON detach.
+- `takeDamage` ([life.ts:49,52](packages/engine/src/game/operations/zones/life.ts#L49-L52))
+  — `DAMAGE_TAKEN` / `LIFE_DAMAGED` fire before the card moves to `trigger`.
+- `resolveBattle` ([battle.ts:91-97](packages/engine/src/game/operations/battle.ts#L91-L97))
+  — `BATTLE_RESOLVED` fires before the damage/K.O. consequence.
+
+These are the three sites that need last-known-information about the subject
+*before* it is destroyed, and emitting early is a partial stand-in for that. It
+only helps the staging gate (which evaluates synchronously inside `emit`); effect
+*resolution* still sees the post-mutation board. **Do not normalize these
+individually** — the ordering is fixed as part of introducing a pre-operation
+stage (snapshot capture + prevention checks at the head of every operation).
 
 ### Card data
 

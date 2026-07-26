@@ -15,7 +15,6 @@ import {
     applyTriggerActivation,
     applyDisplaceCardOnField
 } from './game/actions/main';
-import { promoteChosenEffect } from './game/effects';
 import { applyChooseFirstPlayer, applyKeepHand, applyMulligan, setPlayerLife, shuffleDeck } from './game/actions/start';
 import { getCardInstance, removeDecisionPoint, setDecisionPoint, setGameEnd } from './game/mechanics';
 import { enterStartGamePhase, cardsDraw, enterStartOfTurnPhase, setStartTurnState, enterRefreshPhase, enterDrawPhase, enterMainPhase, enterOnOpponentAttackPhase, enterBlockerPhase, enterCounterPhase, enterBattleResolutionPhase, enterWhenAttackingPhase } from './game/operations';

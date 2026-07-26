@@ -15,9 +15,9 @@ import {
     applyTriggerActivation,
     applyDisplaceCardOnField
 } from './game/actions/main';
-import { promoteChosenEffect } from './game/effects';
 import { setPlayerLife, shuffleDeck } from './game/actions/start';
 import { commitEffectFrame, getCardInstance, promoteEffect, removeCurrentFrame, removeDecisionPoint, setDecisionPoint, setGameEnd } from './game/mechanics';
+import { advanceEffect } from './game/effects';
 import { enterStartGamePhase, cardsDraw, enterStartOfTurnPhase, setStartTurnState, enterRefreshPhase, enterDrawPhase, enterMainPhase, enterOnOpponentAttackPhase, enterBlockerPhase, enterCounterPhase, enterBattleResolutionPhase, enterWhenAttackingPhase } from './game/operations';
 import { OPENING_HAND_SIZE } from './game/constants';
 import type { Phase } from './types';
@@ -29,9 +29,10 @@ export function advance(state: GameState): GameState {
 }
 
 function step(state: GameState): GameState {
+    // A promoted effect runs to completion before anything else is considered —
+    // ahead of the Trigger mechanic and ahead of committing a new staging frame.
     if (state.currentEffect !== null) {
-        // evaluate effect step
-        // if an effect cost is unpaid, set a decisionPoint to pay it
+        return advanceEffect(state);
     }
 
     // check both players for trigger

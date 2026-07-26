@@ -1,8 +1,8 @@
 import { produce } from "immer";
 import type { GameConfig, GameSeeds, GameState, PlayerZones } from "../types/state";
 import type { CardDef, DeckList } from "../types/card";
-import type { EffectSequence } from "../types/effect";
-import { CardId, PlayerId } from "../types/primitives";
+import type { EffectFrame } from "../types/effect";
+import type { CardId, PlayerId } from "../types/primitives";
 import { instantiatePlayerBoard } from "./instantiation";
 import { nextInt } from "../rng/rng";
 import { generateGameSeeds } from "../rng/seeds";
@@ -73,12 +73,12 @@ export function createEmptyGameState(config: GameConfig): GameState {
         currentBattle: null,
         battlesThisTurn: [],
 
-        currentEffect: null,
-        pendingEffects: emptyPendingEffects(playerIds),
         decisionPoint: { type: "SELECT_FIRST_PLAYER", player: coinFlipWinner},
 
-        listeners: [],
-        activatableEffects: [],
+        currentEffect: null,
+        effectQueue: [],
+        stagingFrame: emptyEffectFrame(playerIds),
+
         statusEffects: [],
 
         gameLog: [],
@@ -109,6 +109,6 @@ export function emptyPlayerZones(playerIds: PlayerId[]): Record<PlayerId, Player
     return zones;
 }
 
-export function emptyPendingEffects(playerIds: PlayerId[]): Record<PlayerId, EffectSequence[]> {
+export function emptyEffectFrame(playerIds: PlayerId[]): EffectFrame {
     return Object.fromEntries(playerIds.map(id => [id, []]));
 }

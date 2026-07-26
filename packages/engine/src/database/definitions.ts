@@ -1,6 +1,7 @@
 import { ALL_CARDS_URL } from "./config";
 import type { Card, CardDef, DeckList } from "../types/card";
-import { CardId } from "../types/primitives";
+import type { CardId } from "../types/primitives";
+import { effectDefsFor } from "../cards";
 
 export async function fetchCardData(): Promise<Record<CardId, Card>> {
     const response = await fetch(`${ALL_CARDS_URL}`);
@@ -41,6 +42,6 @@ function toCardDef(card: Card): CardDef {
         attributes: card.attributes,
         aliases: card.aliases,
         restrictions: card.restrictions,
-        effects: [] // effects will be added later, not stored in the database right now
+        effectDefs: effectDefsFor(card.id)
     };
 }

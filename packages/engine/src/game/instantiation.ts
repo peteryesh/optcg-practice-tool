@@ -72,6 +72,11 @@ export function instantiateDon(state: GameState, donCount: number, controller: P
 }
 
 export function createInstance(instanceId: CardInstanceId, cardClass: CardClass, controller: PlayerId, cardDef?: CardDef, initialZone: Zone | null = null): CardInstance {
+    // Only DON instances exist without a definition. Anything else with no cardId
+    // is unusable downstream, so fail here rather than at the first lookup.
+    if (cardClass !== "DON" && !cardDef) {
+        throw new Error(`Cannot create a ${cardClass} instance ${instanceId} without a card definition`);
+    }
     const baseInstance = {
         instanceId,
         controller,
@@ -82,7 +87,7 @@ export function createInstance(instanceId: CardInstanceId, cardClass: CardClass,
         case "LEADER":
             return {
                 ...baseInstance,
-                cardId: cardDef?.id,
+                cardId: cardDef!.id,
                 class: "LEADER",
                 attachedDon: [],
                 effectsUsedThisTurn: {}
@@ -90,28 +95,31 @@ export function createInstance(instanceId: CardInstanceId, cardClass: CardClass,
         case "CHARACTER":
             return {
                 ...baseInstance,
-                cardId: cardDef?.id,
+                cardId: cardDef!.id,
                 class: "CHARACTER",
                 attachedDon: [],
                 playedOnTurns: [],
-                effectsUsedThisTurn: {}
+                effectsUsedThisTurn: {},
+                flipped: false
             } as CharacterInstance;
         case "STAGE":
             return {
                 ...baseInstance,
-                cardId: cardDef?.id,
+                cardId: cardDef!.id,
                 class: "STAGE",
                 attachedDon: [],
                 playedOnTurns: [],
-                effectsUsedThisTurn: {}
+                effectsUsedThisTurn: {},
+                flipped: false
             } as StageInstance;
         case "EVENT":
             return {
                 ...baseInstance,
-                cardId: cardDef?.id,
+                cardId: cardDef!.id,
                 class: "EVENT",
                 playedOnTurns: [],
-                effectsUsedThisTurn: {}
+                effectsUsedThisTurn: {},
+                flipped: false
             } as EventInstance;
         case "DON":
             return {

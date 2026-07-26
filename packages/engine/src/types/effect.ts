@@ -7,25 +7,21 @@ export type EffectId = string;
 // Effect as it is stored on the database
 // Effect is stored on the definition as Record<EffectId, EffectDef>
 export type EffectDef = {
-    activatingSignals: SignalType[];
     condition?: BoardCondition;
-    cost?: EffectCost;
+    steps: EffectStep[];
+    activation: SignalActivation[];
     activeZone: Zone;
     oncePerTurn: boolean;
-    optional: boolean;
-    steps: EffectStep[];
 }
 
 export type EffectContext = {
+    condition?: BoardCondition;
+    steps: EffectStep[];
     playerId: PlayerId;
     effectId: EffectId;
     instanceId: CardInstanceId;
-    condition?: BoardCondition;
-    cost?: EffectCost;
-    optional: boolean;
     cursor: number;
     locals: Record<string, any>;
-    steps: EffectStep[];
 }
 
 export type EffectFrame = Record<PlayerId, EffectRef[]>;
@@ -41,29 +37,35 @@ export type EffectStep =
     | PaymentStep
     | ResolutionStep;
 
+interface BaseStep {
+    bind?: string;
+    label?: string;
+}
+
 // Requirement step is a conditional check on board condition
 // Requirement step preceding a payment step should check for the ability to pay the cost
-interface RequirementStep {
+export interface RequirementStep extends BaseStep {
+    kind: "REQUIREMENT";
     requirement: BoardCondition;
-    checkpoint?: true;
 }
 
 // Payment must always be preceded by requirement
 // Payment step is a cost that must be paid to activate the effect, if it fails, the effect is aborted
 // Cost does not require a check because it should already have been checked in the requirement step
-interface PaymentStep {
-    cost?: EffectCost;
-    checkpoint?: true;
+export interface PaymentStep extends BaseStep {
+    kind: "PAYMENT";
+    cost: EffectCost;
+    optional: boolean; // If true, the player can choose to skip this payment step and not activate the effect
 }
 
 // Step to resolve the effect post requirement and payment, if any
 // Contains the actual functionality of the effect
-interface ResolutionStep {
+export interface ResolutionStep extends BaseStep {
+    kind: "RESOLUTION";
     operation: EffectOperation;
-    checkpoint?: true;
 }
 
-type EffectOperation =
+export type EffectOperation =
     | { type: "REORDER"; from: "LOOK"; to: Zone; toPos: StackPosition }
     | { type: "LOOK"; from: Zone; fromPos?: StackPosition; amount: AmountExpression }
     | { type: "ADD_TO_HAND"; target?: TargetExpression; reveal?: boolean }
@@ -78,6 +80,18 @@ export type EffectCost =
     | { kind: "LIFE_TO_HAND"; amount: AmountExpression; lifePos: StackPosition }
     | { kind: "LIFE_TRASH"; amount: AmountExpression; lifePos: StackPosition }
     | { kind: "LIFE_FLIP"; amount: AmountExpression; lifePos: StackPosition; orientation: LifeOrientation }
+
+
+export type SignalActivation = {
+    signal: SignalType;
+    subject: CardFilter;
+}
+
+// export type EffectValue =
+//     | { kind: "CARDS"; value: CardInstanceId[] }
+//     | { kind: "SNAPSHOTS"; value: CardSnapshot[] }
+//     | { kind: "NUMBER"; value: number }
+//     | { kind: "BOOL"; value: boolean }
 
 
 // Status Effects

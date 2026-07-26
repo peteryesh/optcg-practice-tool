@@ -7,7 +7,6 @@ import { donAdd, donRefresh } from './zones/don';
 import { setNextActivePlayer, incrementTurn, resetBattleStateForTurn, resetCardsPlayedThisTurn, resetEffectsUsedThisTurn } from '../mechanics/turn';
 import { cardsRefresh } from './cards';
 import { cardsDraw } from './zones/hand';
-import { processEffects } from '../effects';
 
 // Main turn phases
 export function enterStartGamePhase(state: GameState): GameState {
