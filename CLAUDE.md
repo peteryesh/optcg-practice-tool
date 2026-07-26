@@ -52,9 +52,11 @@ action log.
 2. `advance` ([conductor.ts](packages/engine/src/conductor.ts)) repeatedly calls
    `step` until the game reaches a `decisionPoint` (needs player input) or a
    `winner`. `step` drives effect staging/promotion, the Trigger mechanic, and
-   phase transitions off `state.phase`. (Stepping a *promoted* effect through its
-   `EffectStep`s is the current WIP hole — the `currentEffect` branch in `step` is
-   still empty; see Work-in-progress notes.)
+   phase transitions off `state.phase`. A promoted effect is stepped by
+   `advanceEffect` ([game/effects/stepper.ts](packages/engine/src/game/effects/stepper.ts)),
+   which `step` delegates to — **one step per call**, since `advance` already loops
+   to a fixed point. That branch runs ahead of the Trigger check and ahead of
+   committing a new staging frame, so a resolving effect always finishes first.
 
 So game progression is a pump: apply one player action, then auto-advance through
 all forced state changes until the next decision is required. A `DecisionPoint`
@@ -113,6 +115,14 @@ submodules.
   effect can be activated/paid at all. It is checked at staging/promotion and is
   carried onto the `EffectContext`; it is not a step. Conditionals that apply
   *mid*-resolution are `RequirementStep`s instead.
+- **`SignalActivation` is what an effect listens for**, matched by `matchesActivation`
+  in [emitter.ts](packages/engine/src/game/emitter.ts). `signal` and `subject` are the
+  gate; `causeKind`, `source` and `fromZone` are optional narrowings where an omitted
+  field matches anything. Two rules to know: asking for a field the signal does not
+  carry **fails** rather than matching (a definition error must not fire on
+  everything), and `causeKind`/`source` are deliberately separate — a `CardFilter`
+  alone cannot tell "caused by a player" from "caused by an effect", since with no
+  `sourceId` to test it simply fails. `cause` is mandatory on every signal.
 - **Effect operations and costs never name a player.** No `EffectOperation` /
   `EffectCost` carries a `PlayerId`. Who acts is derived from the expressions:
   `EvalContext.self` is the controller of the card whose effect activated, `source`
@@ -129,11 +139,23 @@ submodules.
 
 ### Work-in-progress notes
 
-The effect system is mid-migration to the expression/DSL model. Expect stubs:
-`ACTIVATE_EFFECT`, `CHOOSE_NEXT_EFFECT`, and `CHOOSE_TARGETS` return "not yet
-implemented" (in validator/reducer/apply). Also unwritten: the `currentEffect`
-stepper in `conductor.ts`, and `evalBoardCondition`/`evalTargetExpression` in the
-evaluator.
+The **On-Play draw slice works end to end** — staging, promotion, the stepper and
+`DRAW` resolution all run through the reducer, and two real cards (`OP04-045`,
+`OP13-041`) are authored in `src/cards/` and tested against the registry.
+
+Everything else is still stubbed. `ACTIVATE_EFFECT`, `CHOOSE_NEXT_EFFECT` and
+`CHOOSE_TARGETS` return "not yet implemented" (validator/reducer/apply), so **two
+effects staging off one signal deadlocks** — the conductor sets a
+`RESOLVE_EFFECT_ORDER` decision point that no action can answer. `REQUIREMENT` and
+`PAYMENT` steps throw from the stepper; every `EffectOperation` other than `DRAW`
+throws from `executeResolution`. `evalBoardCondition` and `evalTargetExpression`
+are unwritten, so `EffectDef.condition` is a commented-out stub in the staging
+gate, and `oncePerTurn` is never read.
+
+`signalSubjects` still throws for combat signals — they name cards in more than one
+role (attacker vs defender) and a flat subject list cannot tell them apart.
+Subject-less signals return `[]`, which means phase-keyed effects cannot stage,
+since the subject filter has nothing to match against.
 
 **Signal emission ordering is deliberately inconsistent in three places.** The
 convention is mutate-then-emit, and everything follows it except:

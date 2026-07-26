@@ -1,5 +1,5 @@
 import type { CardInstanceId, PlayerId, Zone, Keyword, StackPosition, CardId, LifeOrientation } from './primitives';
-import type { SignalType } from './signal';
+import type { SignalCause, SignalType } from './signal';
 import type { CardFilter, BoardCondition, AmountExpression, TargetExpression } from './expression';
 
 export type EffectId = string;
@@ -82,9 +82,18 @@ export type EffectCost =
     | { kind: "LIFE_FLIP"; amount: AmountExpression; lifePos: StackPosition; orientation: LifeOrientation }
 
 
+// What an effect listens for. `signal` and `subject` are the gate; the rest are
+// optional narrowings, omitted meaning "match anything".
+//
+// causeKind and source are two DIFFERENT checks, not one. A filter alone cannot
+// tell "caused by a player" from "caused by an effect" — with no sourceId to test
+// it simply fails, conflating no-cause with wrong-cause.
 export type SignalActivation = {
     signal: SignalType;
     subject: CardFilter;
+    causeKind?: SignalCause["kind"][];   // PLAYER | BATTLE | EFFECT | OVERFLOW | RULE
+    source?: CardFilter;                 // the causing card, where the cause names one
+    fromZone?: Zone[];                   // origin — the card itself can no longer say
 }
 
 // export type EffectValue =

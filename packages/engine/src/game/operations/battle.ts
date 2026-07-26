@@ -29,7 +29,7 @@ export function declareAttack(state: GameState, playerId: PlayerId, attackerId: 
     // STATUS EFFECT: If the defender is standing, need to check if a status effect allows to attack active characters
     if (defender.class === "CHARACTER" && !defender.isRested) throw new InvalidActionError(`${defenderId} is an active character and ${attackerId} does not have the ability to attack active characters`);
     state = cardsSetRested(state, playerId, [attackerId], { kind: "RULE" });
-    return emit(state, { type: "ATTACK_DECLARED", attackerId, defenderId, controller: playerId });
+    return emit(state, { type: "ATTACK_DECLARED", attackerId, defenderId, controller: playerId, cause: { kind: "PLAYER" } });
 
 }
 
@@ -70,7 +70,7 @@ export function playCounter(state: GameState, playerId: PlayerId, counterCardId:
     if (!battle) throw new InvalidActionError(`No current battle found, battle is corrupt`);
     state = updateCurrentBattle(state, {...battle, counter: battle.counter + derivedCounter});
     state = sendHandToTrash(state, playerId, [counterCardId], { kind: "PLAYER" });
-    return emit(state, { type: "COUNTER_PLAYED", counterId: counterCardId, battle: battle, controller: playerId })
+    return emit(state, { type: "COUNTER_PLAYED", counterId: counterCardId, battle: battle, controller: playerId, cause: { kind: "PLAYER" } })
 }
 
 export function resolveBattle(state: GameState): GameState {
@@ -89,13 +89,13 @@ export function resolveBattle(state: GameState): GameState {
         // STATUS EFFECT: if attacker has banish, send life to trash and do not deal damage
         // STATUS EFFECT: if attacker has double attack, deal damage with a count of 2
         if (defender.class === "LEADER") {
-            state = emit(state, { type: "BATTLE_RESOLVED", battle: battle, attackerPower: attackerPower, defenderPower: defenderPower + battle.counter, outcome: "HIT" });
+            state = emit(state, { type: "BATTLE_RESOLVED", battle: battle, attackerPower: attackerPower, defenderPower: defenderPower + battle.counter, outcome: "HIT", cause: { kind: "BATTLE", sourceId: battle.attackerId } });
             return takeDamage(state, defender.controller, { kind: "BATTLE", sourceId: battle.attackerId });
         }
         if (defender.class === "CHARACTER") {
-            state = emit(state, { type: "BATTLE_RESOLVED", battle: battle, attackerPower: attackerPower, defenderPower: defenderPower + battle.counter, outcome: "HIT" });
+            state = emit(state, { type: "BATTLE_RESOLVED", battle: battle, attackerPower: attackerPower, defenderPower: defenderPower + battle.counter, outcome: "HIT", cause: { kind: "BATTLE", sourceId: battle.attackerId } });
             return removeCardsFromField(state, defender.controller, [battle.defenderId], "KO", "TOP", { kind: "BATTLE", sourceId: battle.attackerId });
         }
     }
-    return emit(state, { type: "BATTLE_RESOLVED", battle: battle, attackerPower: attackerPower, defenderPower: defenderPower + battle.counter, outcome: "FAIL" });
+    return emit(state, { type: "BATTLE_RESOLVED", battle: battle, attackerPower: attackerPower, defenderPower: defenderPower + battle.counter, outcome: "FAIL", cause: { kind: "BATTLE", sourceId: battle.attackerId } });
 }

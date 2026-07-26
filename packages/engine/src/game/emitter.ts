@@ -1,5 +1,5 @@
 import { produce } from 'immer';
-import type { CardInstanceId, EffectId, EffectRef, EvalContext, GameAction, GameSignal, GameState, PlayerId } from '../types';
+import type { CardInstanceId, EffectId, EffectRef, EvalContext, GameAction, GameSignal, GameState, PlayerId, SignalActivation } from '../types';
 import { getCardDef, getCardInstance, setGameEnd, stageEffectRef } from './mechanics';
 import { evalCardFilter } from '../evaluator';
 
@@ -59,16 +59,51 @@ export function emit(state: GameState, signal: GameSignal): GameState {
             // pre-operation stage, exit effects must switch to matching signal.fromZone
             // in the same change, or they will stop staging silently.
             if (card.currentZone !== effectDef.activeZone) continue;
-            // OR over (signal, subject) pairs — two matching entries still stage once.
-            const activated = effectDef.activation.some(activation =>
-                activation.signal === signal.type &&
-                subjects.some(subjectId => evalCardFilter(state, evalContext, subjectId, activation.subject))
+            // OR over activation entries — two matching entries still stage once.
+            const activated = effectDef.activation.filter(activation =>
+                matchesActivation(state, evalContext, signal, subjects, activation)
             );
-            if (!activated) continue;
+            if (activated.length === 0) continue;
             state = stageEffectRef(state, card.controller, instanceId, effectId);
         }
     }
     return state;
+}
+
+// Does this signal satisfy everything the activation asks for?
+//
+// `signal` and `subject` are the gate proper; causeKind, source and fromZone are
+// optional narrowings, and an omitted one matches anything — which is what keeps
+// every activation written before they existed valid unchanged.
+function matchesActivation(
+    state: GameState,
+    evalContext: EvalContext,
+    signal: GameSignal,
+    subjects: CardInstanceId[],
+    activation: SignalActivation,
+): CardInstanceId[] | null {
+    if (activation.signal !== signal.type) return null;
+    const matched = subjects.filter(subjectId => evalCardFilter(state, evalContext, subjectId, activation.subject));
+    if (matched.length === 0) return null;
+    
+    // Not every signal carries an origin. Asking for one that the signal cannot
+    // report is a definition error, so it fails rather than matching by default.
+    if (activation.fromZone) {
+        if (!("fromZone" in signal)) return null;
+        if (!activation.fromZone.includes(signal.fromZone)) return null;
+    }
+
+    if (activation.causeKind && !activation.causeKind.includes(signal.cause.kind)) return null;
+
+    if (activation.source) {
+        // PLAYER, RULE and OVERFLOW causes name no card, so a source filter has
+        // nothing to test — the case a bare CardFilter cannot tell apart from a
+        // mismatch, and the reason causeKind and source are separate fields.
+        if (!("sourceId" in signal.cause)) return null;
+        if (!evalCardFilter(state, evalContext, signal.cause.sourceId, activation.source)) return null;
+    }
+
+    return matched;
 }
 
 // Which card(s) a signal is about, so the staging gate has a candidate to test
@@ -87,6 +122,14 @@ export function signalSubjects(signal: GameSignal): CardInstanceId[] {
         case "STAGE_PLAYED":
         case "EVENT_PLAYED":
             return [signal.instanceId];
+
+        // Multi-card movement signals
+        case "CARDS_SENT_TO_TRASH":
+        case "CARDS_SENT_TO_HAND":
+        case "CARDS_SENT_TO_DECK":
+        case "CARDS_SENT_TO_LIFE":
+        case "CARDS_SENT_TO_LOOK":
+            return signal.instanceIds;
 
         // Genuinely about no card. Note that staging cannot currently fire an
         // effect off a subject-less signal — `subjects.some(...)` over [] is

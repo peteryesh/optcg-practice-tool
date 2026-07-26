@@ -4,8 +4,8 @@ import { createTestState, makeCharacterInstance, makeEffectDef, makeDrawStep, pl
 import type { GameState } from "../../types/state";
 import type { GameSignal } from "../../types/signal";
 import type { CardInstance } from "../../types/card";
-import type { EffectDef, EffectId } from "../../types/effect";
-import type { CardInstanceId, PlayerId, Zone } from "../../types/primitives";
+import type { EffectDef, EffectId, SignalActivation } from "../../types/effect";
+import type { CardInstanceId, Color, PlayerId, Zone } from "../../types/primitives";
 
 // Phase 1.A + 1.C — signalSubjects and the emitter's staging gates.
 //
@@ -135,6 +135,30 @@ function boardWithListener(
     const listener = makeCharacterInstance({ controller, cardId: EFFECT_CARD, currentZone: zone });
     state = placeCard(state, listener, zone, controller);
     return { state, listener };
+}
+
+// Same board, plus a card that can act as the cause of an effect-driven play.
+const CAUSE_CARD = "OP01-CAUSE";
+
+function boardWithListenerAndCause(
+    effectDefs: Record<EffectId, EffectDef>,
+    causeColors: Color[],
+): { state: GameState; listener: CardInstance; causeCard: CardInstance } {
+    const { state: base, listener } = boardWithListener(effectDefs);
+    const causeCard = makeCharacterInstance({ controller: "p2", cardId: CAUSE_CARD, currentZone: "CHARACTERS" });
+
+    const withDef: GameState = {
+        ...base,
+        definitions: {
+            ...base.definitions,
+            [CAUSE_CARD]: {
+                id: CAUSE_CARD, name: CAUSE_CARD, class: "CHARACTER", cost: 1, power: 1000,
+                colors: causeColors, types: [], attributes: [], aliases: [], restrictions: [],
+            },
+        },
+    };
+
+    return { state: placeCard(withDef, causeCard, "CHARACTERS", "p2"), listener, causeCard };
 }
 
 function playedSignal(instanceId: CardInstanceId, controller: PlayerId): GameSignal {
@@ -274,6 +298,105 @@ describe("staging gates", () => {
         const next = emit(state, playedSignal(listener.instanceId, "p2"));
 
         expect(next.stagingFrame["p2"]).toHaveLength(1);
+        expect(next.stagingFrame["p1"]).toEqual([]);
+    });
+});
+
+// The two gate fields the discriminated SignalActivation adds. Both are optional:
+// an activation that omits them matches any cause and any origin zone, which is
+// what keeps every existing card definition valid unchanged.
+describe("activation gates on signal fields", () => {
+    const withCause = (
+        narrowing: Pick<SignalActivation, "causeKind" | "source">,
+    ): Record<EffectId, EffectDef> => ({
+        [EFFECT_ID]: makeEffectDef({
+            activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY" }, ...narrowing }],
+            steps: [makeDrawStep(1)],
+        }),
+    });
+
+    it("stages when the cause kind and causing card both match", () => {
+        const { state, listener, causeCard } = boardWithListenerAndCause(
+            withCause({ causeKind: ["EFFECT"], source: { kind: "COLOR", color: "BLUE" } }),
+            ["BLUE"],
+        );
+
+        const next = emit(state, {
+            ...playedSignal(listener.instanceId, "p1"),
+            cause: { kind: "EFFECT", sourceId: causeCard.instanceId },
+        } as GameSignal);
+
+        expect(next.stagingFrame["p1"]).toHaveLength(1);
+    });
+
+    // This is the distinction a bare "does it have a sourceId" check cannot make.
+    it("does not stage when the cause kind differs", () => {
+        const { state, listener } = boardWithListenerAndCause(
+            withCause({ causeKind: ["EFFECT"] }),
+            ["BLUE"],
+        );
+
+        // played by the player, not by an effect
+        const next = emit(state, playedSignal(listener.instanceId, "p1"));
+
+        expect(next.stagingFrame["p1"]).toEqual([]);
+    });
+
+    it("does not stage when the causing card fails the filter", () => {
+        const { state, listener, causeCard } = boardWithListenerAndCause(
+            withCause({ causeKind: ["EFFECT"], source: { kind: "COLOR", color: "BLUE" } }),
+            ["RED"],
+        );
+
+        const next = emit(state, {
+            ...playedSignal(listener.instanceId, "p1"),
+            cause: { kind: "EFFECT", sourceId: causeCard.instanceId },
+        } as GameSignal);
+
+        expect(next.stagingFrame["p1"]).toEqual([]);
+    });
+
+    // A cause filter cannot pass when nothing caused it — RULE carries no sourceId.
+    it("does not stage on a causeless signal when a causing card is required", () => {
+        const { state, listener } = boardWithListenerAndCause(
+            withCause({ source: { kind: "ANY" } }),
+            ["BLUE"],
+        );
+
+        const next = emit(state, {
+            ...playedSignal(listener.instanceId, "p1"),
+            cause: { kind: "RULE" },
+        } as GameSignal);
+
+        expect(next.stagingFrame["p1"]).toEqual([]);
+    });
+
+    // fromZone is the field that cannot be recovered from the card: by the time
+    // the signal fires the card has already moved to its destination.
+    it("stages when the origin zone is listed", () => {
+        const { state, listener } = boardWithListener({
+            [EFFECT_ID]: makeEffectDef({
+                activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY" }, fromZone: ["HAND"] }],
+                steps: [makeDrawStep(1)],
+            }),
+        });
+
+        const next = emit(state, playedSignal(listener.instanceId, "p1"));
+
+        expect(next.stagingFrame["p1"]).toHaveLength(1);
+    });
+
+    it("does not stage when the origin zone is not listed", () => {
+        const { state, listener } = boardWithListener({
+            [EFFECT_ID]: makeEffectDef({
+                activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY" }, fromZone: ["TRASH"] }],
+                steps: [makeDrawStep(1)],
+            }),
+        });
+
+        // played from hand, but the effect only listens for plays out of the trash
+        const next = emit(state, playedSignal(listener.instanceId, "p1"));
+
         expect(next.stagingFrame["p1"]).toEqual([]);
     });
 });

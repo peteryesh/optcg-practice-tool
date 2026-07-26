@@ -67,11 +67,11 @@ export type GameSignal =
     | { type: "PHASE_CHANGED"; prevPhase: Phase; nextPhase: Phase; cause: SignalCause }
     
     // Combat
-    | { type: "ATTACK_DECLARED"; attackerId: CardInstanceId; defenderId: CardInstanceId; controller: PlayerId }
+    | { type: "ATTACK_DECLARED"; attackerId: CardInstanceId; defenderId: CardInstanceId; controller: PlayerId; cause: SignalCause }
     | { type: "ATTACK_REDIRECTED"; attackerId: CardInstanceId; fromDefenderId: CardInstanceId; toDefenderId: CardInstanceId; cause: SignalCause }
     | { type: "BLOCKER_DECLARED"; blockerId: CardInstanceId; attackerId: CardInstanceId; prevDefenderId: CardInstanceId; controller: PlayerId; cause: SignalCause }
-    | { type: "COUNTER_PLAYED"; counterId: CardInstanceId; battle: BattleRecord; controller: PlayerId }
-    | { type: "BATTLE_RESOLVED"; battle: BattleRecord; attackerPower: number; defenderPower: number; outcome: "HIT" | "FAIL" }
+    | { type: "COUNTER_PLAYED"; counterId: CardInstanceId; battle: BattleRecord; controller: PlayerId; cause: SignalCause }
+    | { type: "BATTLE_RESOLVED"; battle: BattleRecord; attackerPower: number; defenderPower: number; outcome: "HIT" | "FAIL"; cause: SignalCause }
 
     // Generic
     | { type: "CARD_REVEALED"; instanceId: CardInstanceId; controller: PlayerId; fromZone: Zone; revealedTo: RevealedTo; cause: SignalCause }
