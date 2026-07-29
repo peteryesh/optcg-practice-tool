@@ -2,7 +2,7 @@ import { produce } from "immer";
 import { CardInstanceId, EffectContext, EffectDef, EffectId, EffectRef, GameState, PlayerId } from "../../types";
 import { getCardDef, getCardInstance } from "./helpers";
 
-export function stageEffectRef(state: GameState, playerId: PlayerId, instanceId: CardInstanceId, effectId: EffectId): GameState {
+export function stageEffectRef(state: GameState, playerId: PlayerId, instanceId: CardInstanceId, effectId: EffectId, subjects: CardInstanceId[]): GameState {
     const cardDef = getCardDef(state, instanceId);
     if (!cardDef.effectDefs) throw new Error(`${instanceId} does not have an effect on its card definition on ${cardDef.id}`);
     const effectRef = {

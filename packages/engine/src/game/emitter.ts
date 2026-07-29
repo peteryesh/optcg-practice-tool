@@ -60,11 +60,11 @@ export function emit(state: GameState, signal: GameSignal): GameState {
             // in the same change, or they will stop staging silently.
             if (card.currentZone !== effectDef.activeZone) continue;
             // OR over activation entries — two matching entries still stage once.
-            const activated = effectDef.activation.filter(activation =>
-                matchesActivation(state, evalContext, signal, subjects, activation)
-            );
-            if (activated.length === 0) continue;
-            state = stageEffectRef(state, card.controller, instanceId, effectId);
+            const matchedSubjects = [... new Set(effectDef.activation.flatMap(activation =>
+                matchesActivation(state, evalContext, signal, subjects, activation) ?? []
+            ))];
+            if (matchedSubjects.length === 0) continue;
+            state = stageEffectRef(state, card.controller, instanceId, effectId, matchedSubjects);
         }
     }
     return state;
