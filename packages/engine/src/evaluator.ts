@@ -110,6 +110,8 @@ export function evalAmountExpression(state: GameState, evalContext: EvalContext,
                 }
             }
             return count;
+        case "SUBJECT_COUNT":
+            return evalAmountExpression(state, evalContext, expression.value);
         case "ADD":
             return evalAmountExpression(state, evalContext, expression.left) + evalAmountExpression(state, evalContext, expression.right);
         case "SUBTRACT":

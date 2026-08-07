@@ -112,9 +112,21 @@ submodules.
   (`{ self, source }`). Only `CardFilter` and `AmountExpression` are evaluated so
   far; `BoardCondition` and `TargetExpression` are defined but have no evaluator yet.
 - `EffectDef.condition` is the **activation gate** — the board check for whether the
-  effect can be activated/paid at all. It is checked at staging/promotion and is
-  carried onto the `EffectContext`; it is not a step. Conditionals that apply
-  *mid*-resolution are `RequirementStep`s instead.
+  effect can be activated/paid at all. It is carried onto the `EffectContext`; it is
+  not a step. Conditionals that apply *mid*-resolution are `RequirementStep`s instead.
+  **It is evaluated at resolution, against the live board, and failing fizzles** —
+  the effect stages and promotes regardless, then resolves to nothing. "Never staged"
+  was considered and rejected: it makes the failure unreportable, and it does not
+  match a physical game where the card is already committed. Consumption is
+  unaffected — the boundary is the cursor entering the first `ResolutionStep`, which a
+  fizzle never reaches. actionGen reads the same predicate for a different purpose:
+  deciding whether to *offer* an `[Activate: Main]` invoke. That gating applies to
+  invokes only, never to `PLAY_CARD`.
+- **Two temporal semantics, deliberately, in the same effect: subjects are frozen at
+  signal time, board conditions are live at evaluation time.** "Draw 1 for each card
+  discarded" must not re-derive its set from a mutated board; "if you have 15 or more
+  cards in your trash" must not read a stale one. That is why subjects get snapshots
+  and `BoardCondition` does not.
 - **`SignalActivation` is what an effect listens for**, matched by `matchesActivation`
   in [emitter.ts](packages/engine/src/game/emitter.ts). `signal` and `subject` are the
   gate; `causeKind`, `source` and `fromZone` are optional narrowings where an omitted
@@ -123,11 +135,66 @@ submodules.
   everything), and `causeKind`/`source` are deliberately separate — a `CardFilter`
   alone cannot tell "caused by a player" from "caused by an effect", since with no
   `sourceId` to test it simply fails. `cause` is mandatory on every signal.
+- **Activation is meant to run in two tiers**, and does not yet. Tier 1 is
+  signal-level (`signal`, `causeKind`, `fromZone`, `source`) — cheap predicates that
+  touch no cards. Tier 2 is subject selection, the only tier that produces a value.
+  Today the subject filter runs *first*, and worse, the gate is **derived from** the
+  payload (`matched.length === 0 → null`), so "activated, carries nothing" is
+  unrepresentable and subject-less signals can never stage. The target contract is
+  `null` = did not activate, `[]` = activated and carries nothing, non-empty =
+  carries these. See `EFFECT_PLAN.md` milestone 1b.
+- **A *subject* is a card the signal is about, captured as of the instant the
+  signal's cause was determined** — identity, computed state at capture, and an
+  optional role. Today subjects are live ids *derived* from the signal by
+  `signalSubjects`; the settled direction (milestone 6a) is that signals **carry**
+  their subjects as snapshots and `signalSubjects` is deleted. A subject filter
+  therefore reads the board *as it was*, not as it is. The governing invariant:
+  **carried subjects ≡ the set that satisfied the filter**, never the raw signal set
+  — re-running a filter at resolution against a post-mutation board is the
+  last-known-information trap itself.
 - **Effect operations and costs never name a player.** No `EffectOperation` /
   `EffectCost` carries a `PlayerId`. Who acts is derived from the expressions:
   `EvalContext.self` is the controller of the card whose effect activated, `source`
   is that card. `DRAW` draws for `self`; an effect that makes the *opponent* act
   expresses that through its filters/target expression.
+
+### Event cards — the play ordering is load-bearing
+
+`playEvent` ([cards.ts:172-174](packages/engine/src/game/operations/cards.ts#L172-L174))
+moves the card to `TRASH` **before** emitting `EVENT_PLAYED`. That is a game-rules
+requirement, not an implementation detail. Real cards depend on it:
+
+- *"If you have 15 or more cards in your trash, …"* — playable at 14, because the
+  event itself is the 15th by the time its effect is gated.
+- *"If you have 6 or more cards in your hand, draw 2"* — playable at 7, because the
+  event has already left hand.
+
+**Do not hoist `EVENT_PLAYED` above the `moveCard`.** "An event should be announced
+when it is played, not after it reaches the trash" sounds right and silently breaks
+every card of this shape. (Swapping the order of the two *emits* —
+`CARDS_SENT_TO_TRASH` vs `EVENT_PLAYED` — is harmless; only the move must stay first.)
+
+Consequences:
+
+- **An event's `EffectDef.activeZone` must be `TRASH`.** The activeZone gate reads
+  `card.currentZone` at emit time, which is already `TRASH`. Authoring `HAND` looks
+  correct and stages nothing.
+- **No predictive gating in actionGen.** `PLAY_CARD` is generated without checking the
+  effect's condition, and should stay that way — gating it would require evaluating
+  the condition against a hypothetical post-play board. A condition that fails simply
+  resolves to nothing; surface the reason in the log rather than hiding the action.
+- **An event has two distinct costs.** The DON and the card itself are spent by the
+  *play action*, before the effect exists — so nothing refunds them and `abort` has
+  nothing to undo. Any cost *inside* the effect is a `PaymentStep`, resolved after the
+  event is already in the trash: the player is prompted to pay it and activate, or to
+  decline and resolve only what does not depend on it.
+- **Playing an event you cannot or will not pay for is legal and binding.** It is a
+  common in-person mistake, and there are strategic reasons to decline an optional
+  cost. The engine must not prevent it.
+- **A condition that fails FIZZLES.** The effect stages, promotes, finds its condition
+  false and resolves to nothing; the player loses the card. `EffectDef.condition` is
+  evaluated at resolution against the live board — not as a staging gate — which is
+  what makes the failure reportable in the log.
 
 ### Naming conventions
 
@@ -157,6 +224,15 @@ role (attacker vs defender) and a flat subject list cannot tell them apart.
 Subject-less signals return `[]`, which means phase-keyed effects cannot stage,
 since the subject filter has nothing to match against.
 
+Both of those are **symptoms of subjects being derived rather than carried**, and
+both are fixed by the same change (`EFFECT_PLAN.md` milestone 6a): signals gain a
+`subjects` field, roles become a field on the subject, `SignalActivation`
+discriminates structurally on whether that field exists, and `signalSubjects` is
+deleted. Note the ids on signals are **write-only today** — populated at ~51 emit
+sites, read in exactly two places, both inside `signalSubjects` itself — so that
+migration has no read side to chase. Until it lands, `signalSubjects`'s throw is the
+migration tracker: it means "this signal type is not supported yet".
+
 **Signal emission ordering is deliberately inconsistent in three places.** The
 convention is mutate-then-emit, and everything follows it except:
 
@@ -172,7 +248,22 @@ These are the three sites that need last-known-information about the subject
 only helps the staging gate (which evaluates synchronously inside `emit`); effect
 *resolution* still sees the post-mutation board. **Do not normalize these
 individually** — the ordering is fixed as part of introducing a pre-operation
-stage (snapshot capture + prevention checks at the head of every operation).
+stage, whose two halves are separable: snapshot capture (milestone 6a, a pure read,
+no design needed) and prevention checks (milestone 6b, the hard part). Capture is
+what these three sites are reaching for. **The fix is to move the *capture* early, not
+the *emit*** — once a subject carries a snapshot, the two decouple and all three
+normalise to mutate-then-emit with nothing lost.
+
+The capture rule is not "head of the operation" (a draw knows a count, not which
+cards), and **not "always before the mutation"** — capture `CHARACTER_PLAYED` before
+the move and the captured zone is `HAND`, breaking every On-Play effect. It is:
+**capture at the point where the state the signal describes is true.** Entry signals
+describe the post-move world; exit signals describe the pre-move one.
+
+Corollary: the activeZone gate reads the listener's **captured** zone when the
+listener is one of the signal's subjects, and its live zone otherwise. That handles
+On-Play and On-K.O. with one rule and removes the need for a `fromZone` special-case
+on exit effects.
 
 ### Card data
 
