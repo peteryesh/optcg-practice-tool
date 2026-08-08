@@ -17,7 +17,7 @@ import type { CardInstanceId, PlayerId } from "../../types/primitives";
 // One card: a character with [On Play] Draw 1 card. One reducer call. Everything
 // between PLAY_CARD and the next decision point is the engine's own business:
 //
-//   PLAY_CARD -> moveCard -> emit(CHARACTER_PLAYED) -> staging gate -> EffectRef
+//   PLAY_CARD -> moveCard -> emit(CHARACTER_PLAYED) -> staging gate -> EffectContext
 //   -> commitEffectFrame -> effectQueue -> promoteEffect -> currentEffect
 //   -> advanceEffect -> executeResolution(DRAW) -> cardsDraw -> cursor off the end
 //   -> currentEffect null -> MAIN_ACTION

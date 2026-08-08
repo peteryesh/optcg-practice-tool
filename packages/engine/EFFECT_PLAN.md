@@ -12,17 +12,109 @@ Everything else is stubbed. `REQUIREMENT`/`PAYMENT` throw from the stepper; ever
 `def.condition` is a commented stub; `oncePerTurn` never read; `signalSubjects` throws on combat
 signals.
 
+**6a step 1 LANDED, 2026-08-07.** Movement and play signals now carry `subjects: CardSnapshot[]`,
+captured pre-mutation. Baseline **266 pass / 0 fail**, engine typechecks clean. What shipped:
+
+- `CardSnapshot` (`types/card.ts`) and `captureSnapshot` (`game/snapshot.ts`) — identity, zone at
+  capture, and every mutable field in both derived and base form. Printed data stays out, recovered
+  via `cardId`, because `state.definitions` is immutable for the life of the game.
+- `evalCardFilter` takes a `CardSnapshot` instead of an id — the universal-input decision, so
+  activation and live evaluation share one path. Live callers wrap in `captureSnapshot`.
+- Converted: `CARDS_SENT_TO_{TRASH,HAND,DECK,LIFE,LOOK}`, `CARD_SENT_TO_TRIGGER`,
+  `{CHARACTER,STAGE,EVENT}_PLAYED`, `CARD_REMOVED_FROM_FIELD`. `signalSubjects` is now a shim: it
+  returns `signal.subjects` when present, `[]` for `PHASE_CHANGED`, throws otherwise.
+- `_removeCardFromField`'s DON-detach loss is **fixed** — one capture at the head of the operation
+  feeds both `CARD_REMOVED_FROM_FIELD` and the `CARDS_SENT_TO_*` after the move, pinned by a test that
+  asserts the subject reports 5001 power while live state reports 5000.
+
+Still open from step 1: emit ordering at the three early sites is **unchanged**, deliberately —
+normalising it requires re-authoring On-K.O. to `activeZone: TRASH` in the same change. `subjects` is
+accepted by `stageEffect` but not yet written onto the context (that is 1a, now a one-line change).
+
+**`EffectRef` DELETED, 2026-08-07.** `EffectContext` is built once at staging and carried unchanged
+through the frame, the queue and resolution — no intermediate reference form, no transform at
+promotion. The split bought nothing: `steps` was already a reference into the immutable definition
+rather than a copy, so the "cheap" form saved no allocation, and promotion had to construct the real
+object anyway. Three consequences:
+
+- `promoteEffect` splices by **object identity**, which is exact. Half of milestone 4's identity bug
+  is gone (see there for what remains). Note the immer detail recorded in the code: the index is
+  computed against `state`, not `draft`, because `draft.array.indexOf(original)` never matches a
+  proxied element.
+- `stageEffectRef` → `stageEffect`; `buildCurrentEffect` and `EffectRef.cardId` deleted.
+- Forward-compatible with resumability: if an effect ever has to leave `currentEffect` and re-enter a
+  queue mid-resolution, a reference form would have had to grow `cursor` and `locals` anyway — i.e.
+  become a context.
+
+Naming note: with one type spanning activation through completion, `PendingEffect` would be wrong for
+half its life. If `EffectContext` is ever renamed, `ActivatedEffect` is the candidate — "context" is
+doing no work in the current name. Not done; it touches the stepper, `evalContextOf` and
+`currentEffect`, so it belongs with milestone 4 rather than on its own.
+
 **Direction change, 2026-08-07.** Subjects move *onto the signals* as captured snapshots rather than
-being derived from them at emit time. Milestone 6a is pulled ahead for it, and milestone 1 splits:
-1a (plumb the channel) ships now and is unaffected; 1b (split the gate from the payload) waits,
-because 6a deletes the piece 1b would otherwise have to invent. Rationale under "Subjects live on
-the signal"; the reversal it supersedes is noted in the pre-operation workstream.
+being derived from them at emit time. Rationale under "Subjects live on the signal"; the reversal it
+supersedes is noted in the pre-operation workstream.
+
+**Ordering, 2026-08-07 (revised — this supersedes "1a ships now").** 6a goes FIRST. The earlier call
+was that 1a's items are agnostic to id-vs-snapshot and could ship ahead; that is true of their code
+*shape* and false of three things that matter: 6a replaces the producer 1a's consumer chain reads
+from, 6a changes `evalCardFilter`'s signature (`CardSnapshot` becomes its universal input) so any
+call site 1a adds gets rewritten, and 1a's last item fixes a `signalSubjects` test that 6a deletes.
+6a is also net deletion, so doing it first means the 1a chain gets written once, into a smaller
+codebase, against the final shape. **The `type Subject = CardInstanceId` alias is dropped** — its
+whole purpose was to localize a swap that no longer happens.
+
+Working order:
+
+1. ~~**6a for movement + play signals only**~~ — **DONE 2026-08-07**
+2. ~~**The 1a consumer chain**~~ — **DONE 2026-08-07**
+3. ~~**The driving card**~~ — **DONE 2026-08-07**, `subjectCount.test.ts`
+4. ~~**1b**~~ — **DONE 2026-08-07**, ahead of schedule; the shim is already deleted
+5. **NEXT: milestone 4**, two effects coexisting. It hard-deadlocks today and the
+   phase-keyed battle design walks straight into it ("on opponent's attack" queues every listener
+   into one frame). The internal half of the identity bug is already gone with `EffectRef`; what
+   remains is `CHOOSE_NEXT_EFFECT` needing the composite `(instanceId, effectId)` key.
+6. Then payments — which is what makes the battle-abandonment rule reachable — and milestones 2, 3, 5
+   in the order milestone 3's survey decides.
+
+**The remaining signal categories were dropped from the plan, not deferred.** Combat is deliberately
+never converting (phase-keyed instead, see 1b); the DON signals convert if a card needs them. There is
+no migration left to finish, so `selectSubjects`' throw is a permanent assertion rather than a
+tracker.
+
+Step 3 is what keeps 6a from landing as "it compiles and stages, and nothing proves the payload is
+right" — the reason 1a-first was attractive, preserved without the rework.
+
+**6b (prevention / replacement) is explicitly deferred, 2026-08-07.** Not just unscheduled — off the
+table until the rest lands. A cancelled operation has to unwind back into whatever invoked it, and
+that control-flow question is not worth opening while the subject channel is still being built.
 
 ---
 
 # The plan — milestones and why
 
-## 1. Give effects access to their subject *(IN FLIGHT — split into 1a/1b, 2026-08-07)*
+## 1. Give effects access to their subject — **COMPLETE, 2026-08-07**
+
+Both halves shipped. An effect now knows what it activated on, as a snapshot taken before the mutation
+that caused the signal. Baseline **276 pass / 0 fail**, engine typechecks clean.
+
+The read side, finishing 1a: `EvalContext.subjects?` (optional — absent means "no activating signal in
+scope", which is not `[]`), threaded by `evalContextOf`, read by a bare `SUBJECT_COUNT` leaf on
+`AmountExpression` that **throws** when subjects are absent rather than answering `0`.
+
+`subjectCount.test.ts` runs the driving card end to end — pre-mutation capture, a multi-subject
+batched signal, `causeKind` + `source` + `fromZone` narrowing together, `ANY_OF` filtering, subjects
+onto the context, `evalContextOf` threading, `SUBJECT_COUNT`, `DRAW`. Verified to bite: deleting the
+one line in `evalContextOf` fails three of its tests with the "no activating signal in scope" throw.
+The card is hypothetical and lives in the test rather than `src/cards/`, since no real card id prints
+that text.
+
+Kept honest: one test asserting a mixed-controller trash batch was **removed** — `_cardsMoveToTrash`
+validates every id against a single player's zone, so that batch is unreachable and the test was
+vacuous. Replaced with an opposing copy of the same card declining to activate, which exercises the
+same `CONTROLLER`-resolves-against-the-listener pairing through a reachable path.
+
+### Original writeup below *(1a paused behind 6a, 2026-08-07)*
 
 **Why:** an effect currently knows *that* it activated but not *what it activated on*. That is the
 missing half of every reactive effect — any card saying "that character", "those cards" or "for
@@ -45,18 +137,17 @@ activation: [{
 steps: [{ kind: "RESOLUTION", operation: { type: "DRAW", amount: { kind: "SUBJECT_COUNT" } } }]
 ```
 
-### 1a. Plumb the channel — no gate change, no card migration
+### 1a. Plumb the channel — resumes after 6a's first category lands
 
-Ships the driving card **on its own**: "≥1 subject matched the filter" is already a correct fire
-condition for it under today's gate, so all ~10 authoring sites keep their current syntax.
+The consumer chain from the signal to `SUBJECT_COUNT`: stage → ref → context → evalContext →
+evaluator. Written against `CardSnapshot[]` directly, since 6a lands first and there is no id stage
+to alias around.
 
-Every item here is agnostic to whether a subject is an id or a snapshot, so **none of it is
-invalidated by 6a**. Alias the element type (`type Subject = CardInstanceId` now) and the later swap
-is localized.
-
-- [x] `signalSubjects` returns `instanceIds` for the five `CARDS_SENT_TO_*` signals
+- [x] ~~`signalSubjects` returns `instanceIds` for the five `CARDS_SENT_TO_*` signals~~ — subsumed by
+      6a, which deletes the function
 - [x] `matchesActivation` returns `CardInstanceId[] | null`; emitter flatMaps + dedupes into
-      `matchedSubjects` and passes it to `stageEffectRef`
+      `matchedSubjects` and passes it to `stageEffectRef`. **Element type becomes `CardSnapshot` in
+      6a**, and the `evalCardFilter` call at `emitter.ts:86` changes with it.
 - [ ] `stageEffectRef` — param exists, not yet written onto the ref object
 - [ ] `EffectRef.subjects` / `EffectContext.subjects` types — REQUIRED, `[]` legal. Coherent because
       of STAGE-ONCE: one ref per event regardless of subject count, so there is always exactly one
@@ -69,11 +160,43 @@ is localized.
       reporting that the question was unanswerable.
 - [ ] `evalContextOf` threads it — easiest to miss, fails silently
 - [ ] `AmountExpression` gains `SUBJECT_COUNT`; evaluator branch throws when subjects absent
-- [ ] STALE TEST: `staging.test.ts > signalSubjects > "throws for a multi-card signal"` asserts the
-      old deferral; should assert it returns the ids. **This is the one red in the current baseline**
-      (259 pass / 1 fail).
+- [ ] ~~STALE TEST: `staging.test.ts > signalSubjects > "throws for a multi-card signal"`~~ — **delete
+      it with `signalSubjects` in 6a** rather than fixing it. It is the one red in the current
+      baseline (259 pass / 1 fail), and it will stay red until 6a removes the function it pins.
 
-### 1b. Split the gate from the payload — BLOCKED ON 6a, deliberately
+**BROKEN BUILD, fix on the way into 6a.** `evaluator.ts:113` already has a `case "SUBJECT_COUNT"`
+that `AmountExpression` has no member for — TS2678 plus TS2339 on `expression.value`. The engine has
+no typecheck of its own, so this only surfaces in the web build. It is a placeholder that recurses
+without ever reading subjects. **Revert it**; do not leave a non-compiling stub sitting through 6a.
+
+### 1b. Split the gate from the payload — **DONE 2026-08-07**
+
+Shipped: `SubjectMatch` (`ANY_OF`/`ALL_OF`), `SignalPredicates` (the tier-1 bag, now including `phase`),
+a `SignalActivation` discriminated structurally on `Extract<GameSignal, { subjects }>`, and
+`selectSubjects` owning the `null` / `[]` / non-empty contract. `signalSubjects` is **deleted** — its
+three cases live in `selectSubjects`. Tier 1 now runs before tier 2. Baseline **269 pass / 0 fail**.
+
+**Phase-keyed effects now stage**, which was the whole point. `BattlePhase` already had
+`WHEN_ATTACKING` / `ON_OPPONENT_ATTACK`, so the design was anticipated in the type.
+
+**BATTLE IS DELIBERATELY NOT MODELLED, decided 2026-08-07.** Combat signals name cards in several
+roles, so they carry no `subjects` and land in the subject-less arm; `selectSubjects` throws if a card
+listens for one. **That throw is a permanent design assertion, not a migration TODO.** "When
+attacking" and "on opponent's attack" are PHASE-KEYED — they watch a battle phase through the `phase`
+predicate and read `state.currentBattle` at resolution. "On opponent's attack" queues every listener
+into one staging frame, which is what the frame is for. The third activation arm (role-filtered
+subjects over named `CardSnapshot` fields) is designed but NOT built; add it only if a real card
+proves it necessary. Do not "fix" the throw by pushing combat into the flat-subjects arm.
+
+Multi-listener battle abilities will deadlock until milestone 4 — two effects in one frame sets
+`RESOLVE_EFFECT_ORDER` and `CHOOSE_NEXT_EFFECT` still throws.
+
+**Found while doing this: engine tests are NEVER TYPECHECKED.** The engine has no tsconfig, and
+`apps/sleapy-web` only includes its own `src`, so engine files are checked transitively — but nothing
+imports `__tests__`, and vitest strips types without checking. Two conditional types written in a test
+helper silently resolved to `never` and nothing complained. Worth a `tsconfig.json` in the engine.
+
+#### Original writeup (superseded by the above)
 
 **One filter, two consumers**: the gate reads its *cardinality*, the payload reads its *extension*.
 Today they are the same operation — `matched.length === 0 → null` (`emitter.ts:87`) — so "activated,
@@ -107,11 +230,14 @@ guesswork.
 the conductor sets `RESOLVE_EFFECT_ORDER`, and `CHOOSE_NEXT_EFFECT` throws "not yet implemented" in
 validator/reducer/actionGen. Most likely thing to break a real playtest.
 
-Forces the **EffectRef identity bug**: `promoteEffect` locates a ref by
-`.map(r => r.instanceId).indexOf(...)` (mechanics/effects.ts), so one card staging two effects
-splices the wrong one; `CHOOSE_NEXT_EFFECT` carries only `{playerId, effectId}` and cannot name an
-instance. Natural key is the composite `(instanceId, effectId)`. Also `EffectRef.cardId` is
-redundant (derivable via `getCardDef`).
+~~Forces the **EffectRef identity bug**~~ — **half fixed 2026-08-07 by collapsing `EffectRef` into
+`EffectContext`.** `promoteEffect` no longer matches on `instanceId`; the queued object IS the object
+that resolves, so it splices by object identity and cannot mis-select between two effects on one card.
+`EffectRef.cardId` went with it (it was derivable via `getCardDef`).
+
+What REMAINS for this milestone: `CHOOSE_NEXT_EFFECT` carries only `{playerId, effectId}` and still
+cannot name an instance, so the player-facing selection path needs the composite `(instanceId,
+effectId)` key even though the internal one no longer does.
 
 ## 5. Let effects be conditional
 
@@ -133,7 +259,7 @@ weaker. No callers to migrate.
 separable, and only capture is on the critical path — prevention is the hard design (replacement
 priority, who intervenes, ordering), capture is mechanical.
 
-### 6a. Snapshot capture — subjects move onto the signals *(PULLED AHEAD, ahead of milestone 3)*
+### 6a. Snapshot capture — subjects move onto the signals *(THE CURRENT PRIORITY — do this first)*
 
 **Why it is worth pulling ahead: it is net deletion.** It removes `signalSubjects` entirely, removes
 the `anyListening` gate's reason to exist, removes `SubjectMatch.NONE`, removes the combat throw, and
@@ -148,33 +274,77 @@ that is currently the only way to see pre-mutation state. Once a subject carries
 decouple — capture before the mutation, emit after it — and all three normalise to mutate-then-emit
 with nothing lost.
 
-The capture rule. Not "head of the operation" (a draw knows a count, not which cards), and **not
-"always before the mutation"** — that is right for exit signals and wrong for entry ones. Capture
-`CHARACTER_PLAYED` before the move and `zoneAtCapture` is `HAND`, breaking every On-Play effect:
+**THE CAPTURE RULE — always pre-mutation, one rule** (settled 2026-08-07, superseding the entry/exit
+split below):
 
-> **Capture at the point where the state the signal describes is true.** Entry signals describe the
-> post-move world; exit signals describe the pre-move one.
+> **A subject is the card as it was immediately before the cause took effect.**
 
-This maps onto what the code already does: entry signals are mutate-then-emit and capture at emit
-time; the three exit sites capture early and emit late.
+Signals are past-tense and descriptive, so this is just what last-known information means, and it is
+what this plan's own subject definition already says ("captured as of the instant the signal's cause
+was determined"). The entry/exit rule contradicted that definition and is now deleted.
 
-**Corollary — the activeZone gate gets a uniform rule, and the On-K.O. trap dissolves.** Read the
-listener's **captured** zone when the listener is one of the signal's subjects, its live zone
-otherwise. On-Play: listener is the subject, captured post-move as `CHARACTERS`, passes. On-K.O.:
-listener is the subject, captured pre-move as `CHARACTERS`, passes. A bystander ("when *another* of
-your characters is K.O.'d") is not a subject and reads live, which is correct. No `fromZone`
-special-casing — it stays an ordinary activation narrowing rather than a load-bearing rescue.
+**Why there is no post-mutation case.** You never need a snapshot to read post-mutation state,
+because the live board already *is* that state at emit time. Snapshots exist for exactly one reason —
+to preserve what the mutation destroys — so a post-capture snapshot is a frozen copy of a board you
+could still read. Surveyed against the real signal union:
+
+- Pre-capture is load-bearing for `CARDS_SENT_TO_TRASH`/`_HAND` from the field (power with DON
+  attached, rested, controller), `DAMAGE_TAKEN`/`LIFE_DAMAGED` (the life card before it moves to
+  `trigger`), `BATTLE_RESOLVED` (defender power before the K.O.), and `CARD_REMOVED_FROM_FIELD` —
+  which is **already lossy today**, since the DON detach runs before the emit.
+- The cases that looked like they wanted post-capture do not. `CHARACTER_PLAYED` differs pre-vs-post
+  in the zone alone, and every filter a real On-Play card uses (`TYPE`, `COLOR`, `COST`,
+  `CONTROLLER`) is definition-derived and timing-invariant — with the origin already on the signal as
+  `fromZone` and the destination implied by the signal type. `DON_ATTACHED` wants the target's
+  post-buff power, which the live board has at emit. `CARDS_RESTED` carrying `rested: false` reads
+  oddly against a past-tense name, but nothing queries it — the signal type already carries the fact.
+
+**Not "head of the operation".** `cardsDraw` knows a count, not which instances, so there is no
+subject set to snapshot until the deck has been read. Head-of-operation is where the *prevention*
+hook goes (6b) — a different position, and fusing the two breaks the draw case.
+
+**Corollary — `activeZone` is the zone the listener is in AT EMIT TIME, and the gate keeps reading the
+LIVE zone.** Once every site is mutate-then-emit this is uniform with no special-casing anywhere:
+
+| effect | card at emit time | `activeZone` |
+|---|---|---|
+| On-Play character | moved to `CHARACTERS`, then emit | `CHARACTERS` — unchanged |
+| Event | moved to `TRASH`, then emit | `TRASH` — unchanged, already the documented convention |
+| On-K.O. | moved to `TRASH`, then emit | `TRASH` — changes from `CHARACTERS` |
+
+The On-K.O. row is the only change, and **nothing is authored against it yet** (`src/cards/` holds
+`OP04-045` and `OP13-041`, both On-Play). It must still land in the *same change* as the emit
+reordering, because the failure mode is silent staging.
+
+Two alternatives were considered and rejected. **Reading the captured zone** breaks On-Play: under
+pre-capture `zoneAtCapture` is `HAND`, which fails against `activeZone: CHARACTERS` and silently kills
+the most common effect in the game. **Narrowing On-K.O. with `fromZone: [CHARACTERS]`** does not work
+either, and the reason is worth recording: the activeZone gate runs *before* the activation is
+consulted, so a card already in `TRASH` is filtered out no matter what the activation says — and
+`CARD_REMOVED_FROM_FIELD` carries no `fromZone` field at all, so asking for one fails by the
+does-not-carry rule. No `fromZone` narrowing is needed regardless: the signal only ever fires for
+field departures, and `removalMethod` discriminates K.O. from bounce within it.
 
 Sizing (measured 2026-08-07): 26 of 31 signal variants name cards; ~51 emit sites populate them;
 `signal.instanceId(s)` is **read in exactly two places, both inside `signalSubjects`**. The ids are
 write-only today, so this is a write-side migration with no read side to chase.
 
-### 6b. Prevention / replacement / continuous "cannot be X"
+### 6b. Prevention / replacement / continuous "cannot be X" *(DEFERRED — not scheduled, 2026-08-07)*
 
 **Why:** the remaining needs of the original milestone 6 — continuous protection, replacement
 effects, and the veto half of the pre-operation hook. Still the biggest item and still not to be done
 piecemeal. See the workstream section for the query-vs-signal sizing question, which applies to 6b
 only; 6a needs no such decision because capture is a pure read.
+
+**Explicitly off the table until the subject work lands.** Beyond its own size, cancellation has a
+control-flow problem worth naming before anyone reopens it: a prevented operation has to unwind back
+into whatever invoked it, and an effect that was mid-resolution when its operation was cancelled has
+to resume somewhere coherent. That interacts with the cursor, the consumption boundary (invariant 3)
+and `abort`-vs-`done`. Not a reason it cannot be done — a reason not to open it alongside 6a.
+
+The head-of-operation hook position belongs to **this** milestone, not to capture. Keep them
+separate: capture is pre-mutation at a point the operation chooses, prevention is at the operation's
+head where it can still refuse.
 
 ## 7. Teach signals about roles
 
@@ -185,6 +355,40 @@ list, and the discriminated `SignalActivation` falls out structurally instead of
 text. The signals needing it: `ATTACK_DECLARED` (attacker/defender), `ATTACK_REDIRECTED`
 (attacker/from/to), `BLOCKER_DECLARED` (blocker/attacker/prevDefender), `COUNTER_PLAYED`,
 `BATTLE_RESOLVED`, `DON_ATTACHED` (don + target), `DON_DETACHED` (don + origin).
+
+**Narrowed, 2026-08-07 — and combat is the WEAKEST case for roles, not the strongest.** Step 1 shipped
+`subjects: CardSnapshot[]` with **no role field and no `Subject` wrapper**, deliberately: the
+multi-role signals are combat and DON, a disjoint set of emit sites from the movement and play signals
+converted so far, so nothing converted gets re-touched when roles arrive. There is no churn to hedge
+against.
+
+Where roles actually earn their place, which is narrower than the list above:
+
+- **`BLOCKER_DECLARED.prevDefenderId` and `ATTACK_REDIRECTED.fromDefenderId` are HISTORICAL** — no
+  state field holds them once the redirect has happened, so nothing can read them back.
+- **`DON_ATTACHED` (dons + target) and `DON_DETACHED` (dons + origin)** pair two different *kinds* of
+  card. A flat list lets a filter written for the character match a DON instance.
+
+Where they do NOT:
+
+- **Battle roles are already split across two fields.** `resolveBattle` emits with
+  `cause: { kind: "BATTLE", sourceId: attackerId }`, so `SignalActivation.source` filters the attacker
+  and `subject` filters the defender, with no role tag needed.
+- **Reading roles back off `state.currentBattle` does not work** — `removeCurrentBattle` runs before
+  all three `BATTLE_RESOLVED` emits, so it is already `null` at emit and doubly gone by resolution.
+  More fundamentally `CardFilter` is a per-card predicate with no cross-referencing leaf; adding one
+  would couple the filter language to combat AND make it a live read.
+- **The two big combat abilities are phase-shaped, not instance-shaped.** "When attacking" and "on
+  opponent's attack" read more naturally as activations keyed to a battle phase than as subject
+  filters over an attacker/defender pair. Battle is a continuous phase, so a combat-specific
+  activation shape is the likelier answer than a general role vocabulary. **Design against real card
+  text before committing either way.**
+
+Two candidate shapes remain live for when this is picked up: a role tag on a flat list
+(`{ snapshot, role }`), or named fields per signal (`DON_ATTACHED: { dons: CardSnapshot[]; target:
+CardSnapshot }`) with the activation naming which field it filters. Named fields are structurally
+typed rather than string-tagged, which fits how `SignalActivation` is meant to discriminate, but they
+fragment the emitter's single "feed subjects to the filter" path.
 
 Rule for what becomes a subject: **a card reference is a subject if the activation language should be
 able to filter on it.** `cause.sourceId` is deliberately NOT one — it has its own `source` filter,
@@ -294,6 +498,49 @@ effect".
 - **Cost accepted: `gameLog` gets heavier**, since every signal now carries snapshots. Replay is seed
   + action log, so correctness is unaffected; this is memory only.
 
+## Battle abandonment (2026-08-07)
+
+**A GAME RULE, not a card interaction.** If a battling character leaves the field before the battle
+resolves, the required behaviour is:
+
+> The effect finishes resolving. Then the battle **fizzles** — no resolution — and play returns
+> peacefully to MAIN.
+
+"Fizzles" is literal: no `BATTLE_RESOLVED` is emitted, no damage is dealt, no K.O. consequence runs.
+Anything keyed to battle resolution therefore does not fire, which is correct — the battle did not
+resolve, it was abandoned.
+
+**The ordering is already right by construction.** `step` runs `advanceEffect` and returns whenever
+`currentEffect !== null` (conductor.ts), so the effect queue drains completely before the phase switch
+is reached. Effects finish, *then* the battle is examined. Nothing needs adding for that half.
+
+**Activation is committed** — an effect that staged while its card was on the field still resolves
+after that card leaves, because the activeZone gate runs at STAGING time, not at resolution. This
+covers the one case that is not self-terminating: both players stage into the same frame, the turn
+player's effect resolves first and removes the defender, and the defender's own effect then resolves
+against a card already in the trash. That is intended.
+
+**The guard belongs at the head of battle-phase handling, not just before resolution**, because the
+departure can land during any of `WHEN_ATTACKING`, `ON_OPPONENT_ATTACK`, `BLOCKER` or `COUNTER`. Test
+is a zone check on both participants (`CHARACTERS`/`LEADER`); on failure `removeCurrentBattle` and
+return to MAIN. Two existing holes assume both are still on the field:
+
+- `conductor.ts` `BLOCKER` case — `getCardInstance(state, state.currentBattle!.defenderId)` returns a
+  trashed card perfectly happily and asks its controller to declare a blocker.
+- `resolveBattle` — its "current battle is corrupt" throw checks CLASS only, and a trashed character
+  is still `class: "CHARACTER"`, so it would resolve and run `calculatePower` on a card in the trash.
+
+**Reachable sooner than a K.O. operation.** `EffectOperation` has no K.O. today, but the driving shape
+does not need one: *"[On Opponent's Attack] You may trash this Character. If you do, …"* removes the
+defender through an optional `PaymentStep`. So this lands with payments, not with K.O.
+
+**`BattleRecord` snapshots — deferred, mechanism understood.** Phase-keyed battle abilities read
+`state.currentBattle` live at resolution, so an effect resolving after a participant has left reads
+base stats (DON already detached). The fix is the same capture used everywhere else — put
+`attacker: CardSnapshot` / `defender: CardSnapshot` on `BattleRecord` at declaration and read those
+for anything computed, ids only for identity. NOT built: no card currently reads a battle
+participant's computed stats in that window. Build it when one does.
+
 ## Structural
 - **Operations never name a player.** No `EffectOperation`/`EffectCost` carries a PlayerId. Who acts
   derives from expressions: `EvalContext.self` = controller of the activating card. `DRAW` draws for
@@ -393,9 +640,12 @@ promotion/resolution run later, after every mutation.
 pre-mutation so the card is still in CHARACTERS and a naive `currentZone === activeZone` check passes
 for On-K.O. today. Once that emit moves after `moveCard`, every On-K.O. effect stops staging
 **silently**. ~~So `signal.fromZone` matching must land in the SAME change as the reordering.~~
-**Superseded 2026-08-07:** the captured-zone rule in 6a handles both directions uniformly, so no
-`fromZone` special-case is needed — but the *silence* of the failure still stands, so the captured-zone
-rule must land in the same change as the reordering.
+~~**Superseded 2026-08-07:** the captured-zone rule in 6a handles both directions uniformly.~~
+**Superseded again, 2026-08-07 (final):** the captured-zone rule is rejected — it breaks On-Play. The
+rule is `activeZone` = the zone at emit time, so On-K.O. effects are authored `TRASH`. See the
+corollary under 6a. The *silence* of the failure is unchanged, so that re-authoring must land in the
+same change as the reordering; nothing is authored against On-K.O. yet, so today that is a docs-and-
+convention change rather than a migration.
 
 **While in there:** `declareBlocker` and `redirectAttack` (battle.ts) mutate BEFORE validating — not
 a live bug (the throw discards state) but the same shape, and a pre-op stage would absorb those
@@ -422,7 +672,8 @@ requirement, and silently breaks *"if you have 15 or more cards in your trash"* 
 - **`SUBJECT_COUNT` shape.** Bare leaf (`{ kind: "SUBJECT_COUNT" }` → `subjects.length`, throw when
   absent) vs a `filter?: CardFilter` re-narrowing at consumption time. The leaf is recommended:
   scaling is already `MULTIPLY(SUBJECT_COUNT, LITERAL n)`, and a consumption-side filter re-reads a
-  post-mutation board. **Settle before 1a lands** — the evaluator branch is written against it. (The
+  post-mutation board. **No longer urgent** — 6a moved ahead of 1a, so this settles before the
+  *consumer chain* is written, not before 6a starts. Revert the broken stub now; decide later. (The
   WIP branch at `evaluator.ts:113` has a `value: AmountExpression` field that recurses without ever
   reading subjects; it is a placeholder, not a design.)
 

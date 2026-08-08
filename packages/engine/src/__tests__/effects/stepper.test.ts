@@ -238,7 +238,7 @@ describe("conductor delegation", () => {
             ...base,
             currentEffect: makeEffectContext({ playerId: "p1", instanceId: source.instanceId, steps: [makeDrawStep(1)] }),
             stagingFrame: {
-                p1: [{ cardId: "OP01-LISTENER", effectId: "e1", instanceId: listener.instanceId }],
+                p1: [makeEffectContext({ playerId: "p1", effectId: "e1", instanceId: listener.instanceId, steps: [] })],
                 p2: [],
             },
         };

@@ -1,111 +1,23 @@
 import { describe, it, expect } from "vitest";
-import { emit, signalSubjects } from "../../game/emitter";
+import { emit } from "../../game/emitter";
 import { createTestState, makeCharacterInstance, makeEffectDef, makeDrawStep, placeCard, withEffect } from "../helpers";
 import type { GameState } from "../../types/state";
 import type { GameSignal } from "../../types/signal";
 import type { CardInstance } from "../../types/card";
-import type { EffectDef, EffectId, SignalActivation } from "../../types/effect";
-import type { CardInstanceId, Color, PlayerId, Zone } from "../../types/primitives";
+import type { EffectDef, EffectId, SignalActivation, SubjectMatch } from "../../types/effect";
+import type { CardInstanceId, Color, Phase, PlayerId, Zone } from "../../types/primitives";
+import { captureSnapshot } from "../../game/snapshot";
 
-// Phase 1.A + 1.C — signalSubjects and the emitter's staging gates.
+// The emitter's staging gates.
 //
-// Written against emit() directly: build a board, emit a signal, assert what
-// landed in stagingFrame. Two gates decide staging — the activeZone gate and the
-// (signal, subject) match over EffectDef.activation.
+// Written against emit() directly: build a board, emit a signal, assert what landed in
+// stagingFrame. Three gates decide staging — the activeZone gate, tier 1 (predicates
+// over the signal) and tier 2 (the SubjectMatch over the signal's carried subjects).
 //
-// WRITE THE POSITIVE CASE FIRST. Today emitter.ts calls .includes(signal.type) on
-// an array of SignalActivation objects, which always returns false at runtime, so
-// every negative case below passes before a line is implemented. Only the first
-// test produces a real red.
-
-// signalSubjects answers "which card(s) is this signal about", so the staging gate
-// has a candidate to test EffectDef.activation[].subject against. Pure function:
-// signal in, ids out, no state.
-//
-// Three categories, and the distinction is deliberate:
-//   1. Mapped        — one unambiguous subject role -> [id]
-//   2. Subject-less  — the signal is about no card at all -> []
-//   3. Undecided     — the signal names cards in MORE THAN ONE role (attacker vs
-//                      defender), or names many at once, and the semantics are not
-//                      settled yet -> throw.
-//
-// Throwing is safe because emit only calls this after confirming some effect
-// listens for the signal type, so an unhandled case means a card genuinely
-// declared interest in semantics that do not exist yet — an authoring bug worth
-// surfacing loudly, not a silent no-fire.
-
-describe("signalSubjects", () => {
-    it("returns the played instance for CHARACTER_PLAYED", () => {
-        expect(signalSubjects({
-            type: "CHARACTER_PLAYED",
-            instanceId: "card-1",
-            controller: "p1",
-            fromZone: "HAND",
-            toZone: "CHARACTERS",
-            cause: { kind: "PLAYER" },
-        })).toEqual(["card-1"]);
-    });
-
-    // Same shape, same single role — free to support alongside CHARACTER_PLAYED.
-    it("returns the played instance for STAGE_PLAYED", () => {
-        expect(signalSubjects({
-            type: "STAGE_PLAYED",
-            instanceId: "card-2",
-            controller: "p1",
-            fromZone: "HAND",
-            toZone: "STAGE",
-            cause: { kind: "PLAYER" },
-        })).toEqual(["card-2"]);
-    });
-
-    it("returns the played instance for EVENT_PLAYED", () => {
-        expect(signalSubjects({
-            type: "EVENT_PLAYED",
-            instanceId: "card-3",
-            controller: "p1",
-            fromZone: "HAND",
-            toZone: "TRASH",
-            cause: { kind: "PLAYER" },
-        })).toEqual(["card-3"]);
-    });
-
-    // Not "unmapped" — genuinely about no card. Returning [] is the true answer.
-    // NOTE: staging currently has no way to fire an effect off a subject-less
-    // signal (`subjects.some(...)` over [] is always false), so phase-keyed effects
-    // cannot activate yet. That gap belongs to staging, not here.
-    it("returns an empty list for signals with no card subject (PHASE_CHANGED)", () => {
-        expect(signalSubjects({
-            type: "PHASE_CHANGED",
-            prevPhase: "DRAW",
-            nextPhase: "MAIN",
-            cause: { kind: "RULE" },
-        })).toEqual([]);
-    });
-
-    // Two cards in two different roles. "When this character attacks" and "when
-    // this character is attacked" are different effects off one signal, and a flat
-    // list cannot tell them apart — it would stage both. Deferred, so: loud.
-    it("throws for a signal whose subject role is ambiguous (ATTACK_DECLARED)", () => {
-        expect(() => signalSubjects({
-            type: "ATTACK_DECLARED",
-            attackerId: "card-1",
-            defenderId: "card-2",
-            controller: "p1",
-        })).toThrow();
-    });
-
-    // Multi-card signals are held back with the fan-out-vs-once semantic and LKI
-    // snapshots, which are deferred together.
-    it("throws for a multi-card signal (CARDS_SENT_TO_TRASH)", () => {
-        expect(() => signalSubjects({
-            type: "CARDS_SENT_TO_TRASH",
-            instanceIds: ["card-1", "card-2"],
-            fromZone: "CHARACTERS",
-            controller: "p1",
-            cause: { kind: "RULE" },
-        })).toThrow();
-    });
-});
+// The contract tier 2 answers with, which everything below is really testing:
+//   null      — did not activate
+//   []        — activated, carries nothing   <- what makes phase-keyed effects possible
+//   non-empty — activated, carries these
 
 const EFFECT_CARD = "OP01-EFFECT";
 const FILLER_CARD = "OP01-FILLER";
@@ -161,10 +73,13 @@ function boardWithListenerAndCause(
     return { state: placeCard(withDef, causeCard, "CHARACTERS", "p2"), listener, causeCard };
 }
 
-function playedSignal(instanceId: CardInstanceId, controller: PlayerId): GameSignal {
+// The subject is captured from live state, which is what the real emit sites do —
+// so a THIS filter matches on instanceId and a CONTROLLER filter on the captured
+// controller, exactly as they would in a game.
+function playedSignal(state: GameState, instanceId: CardInstanceId, controller: PlayerId): GameSignal {
     return {
         type: "CHARACTER_PLAYED",
-        instanceId,
+        subjects: [captureSnapshot(state, instanceId)],
         controller,
         fromZone: "HAND",
         toZone: "CHARACTERS",
@@ -178,11 +93,18 @@ describe("staging gates", () => {
             [EFFECT_ID]: makeEffectDef({ steps: [makeDrawStep(1)] }),
         });
 
-        const next = emit(state, playedSignal(listener.instanceId, "p1"));
+        const next = emit(state, playedSignal(state, listener.instanceId, "p1"));
 
-        expect(next.stagingFrame["p1"]).toEqual([
-            { cardId: EFFECT_CARD, effectId: EFFECT_ID, instanceId: listener.instanceId },
-        ]);
+        // Staging builds the effect in its final resolving shape — there is no
+        // lighter reference form. Asserted on identity rather than deep equality
+        // because the context also carries the def's steps.
+        expect(next.stagingFrame["p1"]).toHaveLength(1);
+        expect(next.stagingFrame["p1"][0]).toMatchObject({
+            playerId: "p1",
+            effectId: EFFECT_ID,
+            instanceId: listener.instanceId,
+            cursor: 0,
+        });
     });
 
     // subject: THIS must not match a different instance of the same cardId. Both
@@ -194,7 +116,7 @@ describe("staging gates", () => {
         const theirs = makeCharacterInstance({ controller: "p2", cardId: EFFECT_CARD, currentZone: "CHARACTERS" });
         const state = placeCard(base, theirs, "CHARACTERS", "p2");
 
-        const next = emit(state, playedSignal(theirs.instanceId, "p2"));
+        const next = emit(state, playedSignal(state, theirs.instanceId, "p2"));
 
         // theirs staged for its own controller; mine did not stage at all
         expect(next.stagingFrame["p1"]).toEqual([]);
@@ -216,7 +138,7 @@ describe("staging gates", () => {
 
         const played = makeCharacterInstance({ controller: "p1", cardId: EFFECT_CARD, currentZone: "CHARACTERS" });
         const withPlayed = placeCard(state, played, "CHARACTERS", "p1");
-        const next = emit(withPlayed, playedSignal(played.instanceId, "p1"));
+        const next = emit(withPlayed, playedSignal(withPlayed, played.instanceId, "p1"));
 
         expect(next.stagingFrame["p1"].map(ref => ref.instanceId)).not.toContain(inDeck.instanceId);
     });
@@ -232,11 +154,14 @@ describe("staging gates", () => {
                     activation: [{
                         signal: "CHARACTER_PLAYED",
                         subject: {
-                            kind: "AND",
-                            filters: [
-                                { kind: "CONTROLLER", controller: "SELF" },
-                                { kind: "CLASS", cardClass: "CHARACTER" },
-                            ],
+                            kind: "ANY_OF",
+                            filter: {
+                                kind: "AND",
+                                filters: [
+                                    { kind: "CONTROLLER", controller: "SELF" },
+                                    { kind: "CLASS", cardClass: "CHARACTER" },
+                                ],
+                            },
                         },
                     }],
                     steps: [makeDrawStep(1)],
@@ -247,7 +172,7 @@ describe("staging gates", () => {
 
         const played = makeCharacterInstance({ controller: "p1", cardId: FILLER_CARD, currentZone: "CHARACTERS" });
         const withPlayed = placeCard(state, played, "CHARACTERS", "p1");
-        const next = emit(withPlayed, playedSignal(played.instanceId, "p1"));
+        const next = emit(withPlayed, playedSignal(withPlayed, played.instanceId, "p1"));
 
         expect(next.stagingFrame["p1"].map(ref => ref.instanceId)).not.toContain(listener.instanceId);
     });
@@ -255,14 +180,14 @@ describe("staging gates", () => {
     it("does not stage when no activation entry matches the signal type", () => {
         const { state, listener } = boardWithListener({
             [EFFECT_ID]: makeEffectDef({
-                activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "THIS" } }],
+                activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY_OF", filter: { kind: "THIS" } } }],
                 steps: [makeDrawStep(1)],
             }),
         });
 
         const next = emit(state, {
             type: "STAGE_PLAYED",
-            instanceId: listener.instanceId,
+            subjects: [captureSnapshot(state, listener.instanceId)],
             controller: "p1",
             fromZone: "HAND",
             toZone: "STAGE",
@@ -272,19 +197,19 @@ describe("staging gates", () => {
         expect(next.stagingFrame["p1"]).toEqual([]);
     });
 
-    // .some() semantics — two matching entries still produce one EffectRef.
+    // .some() semantics — two matching entries still produce one EffectContext.
     it("stages once when two activation entries match the same signal", () => {
         const { state, listener } = boardWithListener({
             [EFFECT_ID]: makeEffectDef({
                 activation: [
-                    { signal: "CHARACTER_PLAYED", subject: { kind: "THIS" } },
-                    { signal: "CHARACTER_PLAYED", subject: { kind: "ANY" } },
+                    { signal: "CHARACTER_PLAYED", subject: { kind: "ANY_OF", filter: { kind: "THIS" } } },
+                    { signal: "CHARACTER_PLAYED", subject: { kind: "ANY_OF", filter: { kind: "ANY" } } },
                 ],
                 steps: [makeDrawStep(1)],
             }),
         });
 
-        const next = emit(state, playedSignal(listener.instanceId, "p1"));
+        const next = emit(state, playedSignal(state, listener.instanceId, "p1"));
 
         expect(next.stagingFrame["p1"]).toHaveLength(1);
     });
@@ -295,7 +220,7 @@ describe("staging gates", () => {
             { controller: "p2" },
         );
 
-        const next = emit(state, playedSignal(listener.instanceId, "p2"));
+        const next = emit(state, playedSignal(state, listener.instanceId, "p2"));
 
         expect(next.stagingFrame["p2"]).toHaveLength(1);
         expect(next.stagingFrame["p1"]).toEqual([]);
@@ -310,7 +235,7 @@ describe("activation gates on signal fields", () => {
         narrowing: Pick<SignalActivation, "causeKind" | "source">,
     ): Record<EffectId, EffectDef> => ({
         [EFFECT_ID]: makeEffectDef({
-            activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY" }, ...narrowing }],
+            activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY_OF", filter: { kind: "ANY" } }, ...narrowing }],
             steps: [makeDrawStep(1)],
         }),
     });
@@ -322,7 +247,7 @@ describe("activation gates on signal fields", () => {
         );
 
         const next = emit(state, {
-            ...playedSignal(listener.instanceId, "p1"),
+            ...playedSignal(state, listener.instanceId, "p1"),
             cause: { kind: "EFFECT", sourceId: causeCard.instanceId },
         } as GameSignal);
 
@@ -337,7 +262,7 @@ describe("activation gates on signal fields", () => {
         );
 
         // played by the player, not by an effect
-        const next = emit(state, playedSignal(listener.instanceId, "p1"));
+        const next = emit(state, playedSignal(state, listener.instanceId, "p1"));
 
         expect(next.stagingFrame["p1"]).toEqual([]);
     });
@@ -349,7 +274,7 @@ describe("activation gates on signal fields", () => {
         );
 
         const next = emit(state, {
-            ...playedSignal(listener.instanceId, "p1"),
+            ...playedSignal(state, listener.instanceId, "p1"),
             cause: { kind: "EFFECT", sourceId: causeCard.instanceId },
         } as GameSignal);
 
@@ -364,7 +289,7 @@ describe("activation gates on signal fields", () => {
         );
 
         const next = emit(state, {
-            ...playedSignal(listener.instanceId, "p1"),
+            ...playedSignal(state, listener.instanceId, "p1"),
             cause: { kind: "RULE" },
         } as GameSignal);
 
@@ -376,12 +301,12 @@ describe("activation gates on signal fields", () => {
     it("stages when the origin zone is listed", () => {
         const { state, listener } = boardWithListener({
             [EFFECT_ID]: makeEffectDef({
-                activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY" }, fromZone: ["HAND"] }],
+                activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY_OF", filter: { kind: "ANY" } }, fromZone: ["HAND"] }],
                 steps: [makeDrawStep(1)],
             }),
         });
 
-        const next = emit(state, playedSignal(listener.instanceId, "p1"));
+        const next = emit(state, playedSignal(state, listener.instanceId, "p1"));
 
         expect(next.stagingFrame["p1"]).toHaveLength(1);
     });
@@ -389,14 +314,174 @@ describe("activation gates on signal fields", () => {
     it("does not stage when the origin zone is not listed", () => {
         const { state, listener } = boardWithListener({
             [EFFECT_ID]: makeEffectDef({
-                activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY" }, fromZone: ["TRASH"] }],
+                activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY_OF", filter: { kind: "ANY" } }, fromZone: ["TRASH"] }],
                 steps: [makeDrawStep(1)],
             }),
         });
 
         // played from hand, but the effect only listens for plays out of the trash
-        const next = emit(state, playedSignal(listener.instanceId, "p1"));
+        const next = emit(state, playedSignal(state, listener.instanceId, "p1"));
 
         expect(next.stagingFrame["p1"]).toEqual([]);
+    });
+});
+
+// A signal that names no card at all. Before the gate was split from the payload this
+// could never stage anything: the subject filter over an empty set produced [], and []
+// was read as "did not activate". Every phase-keyed ability depends on it working.
+function phaseSignal(nextPhase: Phase): GameSignal {
+    return { type: "PHASE_CHANGED", prevPhase: "MAIN", nextPhase, cause: { kind: "RULE" } };
+}
+
+describe("subject-less activation", () => {
+    it("stages a phase-keyed effect, which carries no subjects", () => {
+        const { state } = boardWithListener({
+            [EFFECT_ID]: makeEffectDef({
+                activation: [{ signal: "PHASE_CHANGED", phase: ["WHEN_ATTACKING"] }],
+                steps: [makeDrawStep(1)],
+            }),
+        });
+
+        const next = emit(state, phaseSignal("WHEN_ATTACKING"));
+
+        expect(next.stagingFrame["p1"]).toHaveLength(1);
+    });
+
+    // Without the phase predicate a phase-keyed effect fires on EVERY transition —
+    // "when attacking" would also go off during the draw phase.
+    it("does not stage when a different phase is entered", () => {
+        const { state } = boardWithListener({
+            [EFFECT_ID]: makeEffectDef({
+                activation: [{ signal: "PHASE_CHANGED", phase: ["WHEN_ATTACKING"] }],
+                steps: [makeDrawStep(1)],
+            }),
+        });
+
+        const next = emit(state, phaseSignal("DRAW"));
+
+        expect(next.stagingFrame["p1"]).toEqual([]);
+    });
+
+    // ATTACK_DECLARED names an attacker AND a defender, which the flat subject channel
+    // cannot tell apart, so it deliberately carries no `subjects` and lands in the
+    // subject-less arm by type. Listening for it must FAIL rather than quietly activate
+    // on nothing — battle abilities are phase-keyed instead. This throw is a permanent
+    // design assertion, not a migration TODO.
+    it("throws when an effect listens for a role-shaped signal", () => {
+        const { state } = boardWithListener({
+            [EFFECT_ID]: makeEffectDef({
+                activation: [{ signal: "ATTACK_DECLARED" }],
+                steps: [makeDrawStep(1)],
+            }),
+        });
+
+        expect(() => emit(state, {
+            type: "ATTACK_DECLARED",
+            attackerId: "card-1",
+            defenderId: "card-2",
+            controller: "p1",
+            cause: { kind: "PLAYER" },
+        })).toThrow();
+    });
+});
+
+describe("SubjectMatch quantifiers", () => {
+    // Two cards trashed together, so ALL_OF has something to quantify over.
+    function trashSignal(state: GameState, ids: CardInstanceId[]): GameSignal {
+        return {
+            type: "CARDS_SENT_TO_TRASH",
+            subjects: ids.map(id => captureSnapshot(state, id)),
+            fromZone: "HAND",
+            controller: "p1",
+            cause: { kind: "RULE" },
+        };
+    }
+
+    function boardWithTrashListener(subject: SubjectMatch) {
+        const { state: base, listener } = boardWithListener({
+            [EFFECT_ID]: makeEffectDef({
+                activation: [{ signal: "CARDS_SENT_TO_TRASH", subject } as SignalActivation],
+                steps: [makeDrawStep(1)],
+            }),
+        });
+        const mine = makeCharacterInstance({ controller: "p1", cardId: FILLER_CARD, currentZone: "HAND" });
+        const theirs = makeCharacterInstance({ controller: "p2", cardId: FILLER_CARD, currentZone: "HAND" });
+        let state = placeCard(base, mine, "HAND", "p1");
+        state = placeCard(state, theirs, "HAND", "p2");
+        return { state, listener, mine, theirs };
+    }
+
+    it("ALL_OF stages when every subject matches", () => {
+        const { state, mine } = boardWithTrashListener({
+            kind: "ALL_OF", filter: { kind: "CONTROLLER", controller: "SELF" },
+        });
+
+        const next = emit(state, trashSignal(state, [mine.instanceId]));
+
+        expect(next.stagingFrame["p1"]).toHaveLength(1);
+    });
+
+    it("ALL_OF does not stage when one subject fails the filter", () => {
+        const { state, mine, theirs } = boardWithTrashListener({
+            kind: "ALL_OF", filter: { kind: "CONTROLLER", controller: "SELF" },
+        });
+
+        const next = emit(state, trashSignal(state, [mine.instanceId, theirs.instanceId]));
+
+        expect(next.stagingFrame["p1"]).toEqual([]);
+    });
+
+    // The empty set has to FAIL, or ALL_OF is vacuously true and fires on every signal
+    // that named nothing.
+    it("ALL_OF does not stage for an empty subject set", () => {
+        const { state } = boardWithTrashListener({
+            kind: "ALL_OF", filter: { kind: "CONTROLLER", controller: "SELF" },
+        });
+
+        const next = emit(state, trashSignal(state, []));
+
+        expect(next.stagingFrame["p1"]).toEqual([]);
+    });
+
+    // ANY_OF is existential, so a partial match still activates — and carries only the
+    // subjects that matched, never the raw set.
+    it("ANY_OF stages on a partial match", () => {
+        const { state, mine, theirs } = boardWithTrashListener({
+            kind: "ANY_OF", filter: { kind: "CONTROLLER", controller: "SELF" },
+        });
+
+        const next = emit(state, trashSignal(state, [mine.instanceId, theirs.instanceId]));
+
+        expect(next.stagingFrame["p1"]).toHaveLength(1);
+    });
+
+    // THE GOVERNING INVARIANT: what the effect carries is exactly the set that
+    // satisfied the filter, not the set the signal named. Two cards were trashed;
+    // only one is the effect's business.
+    it("carries the FILTERED subjects, not the raw signal set", () => {
+        const { state, mine, theirs } = boardWithTrashListener({
+            kind: "ANY_OF", filter: { kind: "CONTROLLER", controller: "SELF" },
+        });
+
+        const next = emit(state, trashSignal(state, [mine.instanceId, theirs.instanceId]));
+
+        const staged = next.stagingFrame["p1"][0];
+        expect(staged.subjects.map(s => s.instanceId)).toEqual([mine.instanceId]);
+        expect(staged.subjects.map(s => s.instanceId)).not.toContain(theirs.instanceId);
+    });
+
+    // ALL_OF carries the full raw set, because "all of them matched" means all of them
+    // are what the effect is about. It is a gate refinement, not a narrowing.
+    it("ALL_OF carries every subject, not just the ones tested", () => {
+        const { state, mine } = boardWithTrashListener({
+            kind: "ALL_OF", filter: { kind: "CONTROLLER", controller: "SELF" },
+        });
+        const second = makeCharacterInstance({ controller: "p1", cardId: FILLER_CARD, currentZone: "HAND" });
+        const withSecond = placeCard(state, second, "HAND", "p1");
+
+        const next = emit(withSecond, trashSignal(withSecond, [mine.instanceId, second.instanceId]));
+
+        expect(next.stagingFrame["p1"][0].subjects.map(s => s.instanceId))
+            .toEqual([mine.instanceId, second.instanceId]);
     });
 });

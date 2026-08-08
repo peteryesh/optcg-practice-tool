@@ -44,8 +44,8 @@ function step(state: GameState): GameState {
     }
 
     // commit the frame if there are effects in the frame
-    for (const effectRef of Object.values(state.stagingFrame)) {
-        if (effectRef.length > 0) {
+    for (const staged of Object.values(state.stagingFrame)) {
+        if (staged.length > 0) {
             state = commitEffectFrame(state);
             break;
         }
@@ -61,9 +61,9 @@ function step(state: GameState): GameState {
             const playerId = state.turnOrder[currIdx];
             const frame = state.effectQueue[0];
             if (frame[playerId].length === 1) {
-                const effectRef = frame[playerId][0];
-                // auto promote and pop
-                return promoteEffect(state, effectRef);
+                // auto promote and pop — the queued object is passed straight
+                // through, and promoteEffect finds it by identity.
+                return promoteEffect(state, frame[playerId][0]);
             }
             if (frame[playerId].length > 1) {
                 // set decisionPoint to select next effect and return

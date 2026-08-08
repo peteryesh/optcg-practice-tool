@@ -1,5 +1,6 @@
-import type { CardInstanceId, PlayerId, Zone, Keyword, StackPosition, CardId, LifeOrientation } from './primitives';
-import type { SignalCause, SignalType } from './signal';
+import type { CardInstanceId, PlayerId, Zone, Keyword, StackPosition, CardId, LifeOrientation, Phase } from './primitives';
+import type { GameSignal, SignalCause, SignalType } from './signal';
+import type { CardSnapshot } from './card';
 import type { CardFilter, BoardCondition, AmountExpression, TargetExpression } from './expression';
 
 export type EffectId = string;
@@ -14,23 +15,44 @@ export type EffectDef = {
     oncePerTurn: boolean;
 }
 
+/**
+ * An effect that has activated — built once at staging and carried unchanged through
+ * the staging frame, the queue, and resolution. ONE type for the whole life, not a
+ * reference that is later transformed into a context.
+ *
+ * The former `EffectRef` split (a pointer while queued, a context once promoted) was
+ * removed because it bought nothing: `steps` is a reference into the immutable
+ * definition rather than a copy, so the "cheap" form saved no allocation, and
+ * promotion had to construct the real thing anyway. Collapsing also makes promotion
+ * an exact object-identity splice instead of a lookup by `instanceId`, which is what
+ * previously mis-selected between two effects on the same card.
+ *
+ * `cursor: 0` on a queued effect is not a claim that it has started — position says
+ * that. Queued lives in `effectQueue`, running lives in `currentEffect`.
+ */
 export type EffectContext = {
     condition?: BoardCondition;
     steps: EffectStep[];
     playerId: PlayerId;
     effectId: EffectId;
     instanceId: CardInstanceId;
+    /**
+     * What the effect activated ON, frozen as of the instant before its cause took
+     * effect — exactly the subjects that satisfied the activation's `SubjectMatch`,
+     * never the raw set the signal named.
+     *
+     * REQUIRED, and `[]` is legal. Coherent because of STAGE-ONCE: one context per
+     * event regardless of how many subjects there were, so there is always exactly
+     * one array to fill. `[]` means "activated, carries nothing" — the normal state
+     * for a phase-keyed effect — and is not the same as "did not activate", which
+     * never produces a context at all.
+     */
+    subjects: CardSnapshot[];
     cursor: number;
     locals: Record<string, any>;
 }
 
-export type EffectFrame = Record<PlayerId, EffectRef[]>;
-
-export type EffectRef = {
-    cardId: CardId; // Reference to the card id to get the effect from
-    effectId: EffectId; // Effect id to get from the card
-    instanceId: CardInstanceId; // instance that activated the effect
-}
+export type EffectFrame = Record<PlayerId, EffectContext[]>;
 
 export type EffectStep =
     | RequirementStep
@@ -82,19 +104,79 @@ export type EffectCost =
     | { kind: "LIFE_FLIP"; amount: AmountExpression; lifePos: StackPosition; orientation: LifeOrientation }
 
 
-// What an effect listens for. `signal` and `subject` are the gate; the rest are
-// optional narrowings, omitted meaning "match anything".
-//
-// causeKind and source are two DIFFERENT checks, not one. A filter alone cannot
-// tell "caused by a player" from "caused by an effect" — with no sourceId to test
-// it simply fails, conflating no-cause with wrong-cause.
-export type SignalActivation = {
-    signal: SignalType;
-    subject: CardFilter;
+/**
+ * ONE FILTER, TWO CONSUMERS. The wrapper's `kind` is the quantifier — it decides
+ * whether the effect activates at all — while the `filter` inside decides which
+ * subjects get carried. Making the cardinality explicit at the authoring site is the
+ * point: deriving "did it activate" from "did the payload come back empty" is what
+ * made "activated, carries nothing" unrepresentable.
+ *
+ * ANY_OF is existential — at least one subject must match, and the matches are the
+ * payload.
+ * ALL_OF is universal — every subject the signal named must match, and the payload is
+ * the full raw set, so it is a pure gate refinement that buys nothing on the carrying
+ * side. An EMPTY raw set FAILS it; otherwise it is vacuously true and would fire on
+ * every signal that named nothing.
+ */
+export type SubjectMatch =
+    | { kind: "ANY_OF"; filter: CardFilter }
+    | { kind: "ALL_OF"; filter: CardFilter };
+
+// The signal types that carry their subjects, derived structurally from the signal
+// union rather than listed by hand, so it cannot drift as categories are migrated.
+type SubjectCarryingSignal = Extract<GameSignal, { subjects: CardSnapshot[] }>["type"];
+
+/**
+ * TIER 1 — the optional predicates over the SIGNAL, shared by both activation arms.
+ * Cheap boolean tests that touch no cards, and an omitted one matches anything. Tier 2
+ * is `SubjectMatch`, which tests cards and is the only tier that produces a value.
+ *
+ * causeKind and source are two DIFFERENT checks, not one. A filter alone cannot tell
+ * "caused by a player" from "caused by an effect": with no sourceId to test it simply
+ * fails, conflating no-cause with wrong-cause. (Note this is not the `CausePredicate`
+ * wrapper that EFFECT_PLAN.md rejected — the two stay separate fields.)
+ *
+ * Every one FAILS rather than matches when the signal cannot report the field it asks
+ * for. A definition error must not fire on everything.
+ */
+export type SignalPredicates = {
     causeKind?: SignalCause["kind"][];   // PLAYER | BATTLE | EFFECT | OVERFLOW | RULE
     source?: CardFilter;                 // the causing card, where the cause names one
     fromZone?: Zone[];                   // origin — the card itself can no longer say
-}
+    phase?: Phase[];                     // the phase being ENTERED, for phase-keyed effects
+};
+
+/**
+ * What an effect listens for, in two tiers: `signal` plus `SignalPredicates`, then
+ * `subject`.
+ *
+ * DISCRIMINATED on whether the signal carries subjects, which falls out of the signal
+ * union for free. A phase-keyed activation has no `subject` field *because the type
+ * says the signal names no card*, and that is what lets a subject-less signal activate
+ * an effect at all.
+ *
+ * `subject` is MANDATORY on the carrying arm, deliberately. An optional filter makes a
+ * forgotten one silent, and the effect it breaks is On-Play — "when this is played"
+ * would quietly become "when ANYONE plays a character".
+ *
+ * BATTLE IS NOT MODELLED HERE, AND THAT IS THE DESIGN. Combat signals name cards in
+ * several distinct roles (attacker vs defender), which neither arm expresses, so they
+ * fall into the subject-less arm and `selectSubjects` throws for them. That throw is a
+ * PERMANENT ASSERTION, not a migration TODO: "when attacking" and "on opponent's
+ * attack" are PHASE-KEYED — they watch a battle phase through `phase` and read
+ * `state.currentBattle` at resolution. Do NOT "fix" the throw by pushing combat into
+ * the flat-subjects arm. If a card ever genuinely needs role-filtered subjects it gets
+ * its own arm naming which role it filters, over named `CardSnapshot` fields on the
+ * signal — never a role tag added to `subjects`.
+ */
+export type SignalActivation =
+    | (SignalPredicates & {
+        signal: SubjectCarryingSignal;
+        subject: SubjectMatch;
+    })
+    | (SignalPredicates & {
+        signal: Exclude<SignalType, SubjectCarryingSignal>;
+    });
 
 // export type EffectValue =
 //     | { kind: "CARDS"; value: CardInstanceId[] }

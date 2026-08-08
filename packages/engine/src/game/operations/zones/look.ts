@@ -1,6 +1,7 @@
-import type { GameState, PlayerId, SignalCause, CardInstanceId, DonInstance, StackPosition, Zone } from "../../../types";
+import type { CardSnapshot, GameState, PlayerId, SignalCause, CardInstanceId, DonInstance, StackPosition, Zone } from "../../../types";
 import { moveCard, getZoneArray, attachDon, detachDon, getCardInstance } from "../../mechanics";
 import { emit } from "../../emitter";
+import { captureSnapshot } from "../../snapshot";
 import { InvalidActionError } from "../../../errors";
 import { sendLifeToHand } from './hand';
 import { setGameEnd } from '../../mechanics/gameEnd';
@@ -12,14 +13,16 @@ import { _cardsMoveToLife } from './life';
 // Transient Effect Zone
 
 export function _cardsMoveToLook(state: GameState, playerId: PlayerId, instanceIds: CardInstanceId[], fromZone: Zone, signalCause: SignalCause): GameState {
+    const subjects: CardSnapshot[] = [];
     for (const id of instanceIds) {
         const zone = getZoneArray(state, playerId, fromZone);
         if (!zone.includes(id)) throw new InvalidActionError(`${id} not found in zone ${fromZone} of player ${playerId}`);
         const card = getCardInstance(state, id);
         if (card.class === "DON" || card.class === "LEADER") throw new InvalidActionError(`${id} has a card class of ${card.class} cannot be added to life`);
+        subjects.push(captureSnapshot(state, id));
         state = moveCard(state, id, "LOOK", "TOP");
     }
-    return emit(state, { type: "CARDS_SENT_TO_LOOK", instanceIds: instanceIds, fromZone: fromZone, controller: playerId, cause: signalCause });
+    return emit(state, { type: "CARDS_SENT_TO_LOOK", subjects: subjects, fromZone: fromZone, controller: playerId, cause: signalCause });
 }
 
 export function sendTopDeckToLook(state: GameState, playerId: PlayerId, count: number, signalCause: SignalCause): GameState {

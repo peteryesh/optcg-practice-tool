@@ -7,6 +7,7 @@ import { InvalidActionError } from "../../errors";
 import { donRest, donDetach } from './zones/don';
 import { CHARACTERS_MAX, STAGE_MAX } from '../constants';
 import { calculateCost } from '../calculations';
+import { captureSnapshot } from '../snapshot';
 
 // Set Active/Rested
 
@@ -112,8 +113,12 @@ export function playCharacter(state: GameState, playerId: PlayerId, instanceId: 
     if (characterZone.length >= CHARACTERS_MAX) {
         return setDecisionPoint(state, { type: "DISPLACE_CARD", player: playerId, playedCardId: instanceId });    
     }
+    // Captured in HAND, before the move. On-Play effects are unaffected: the
+    // activeZone gate reads the listener's LIVE zone (CHARACTERS by emit time), not
+    // the subject's captured one.
+    const subject = captureSnapshot(state, instanceId);
     state = moveCard(state, instanceId, "CHARACTERS", "BOTTOM");
-    return emit(state, { type: "CHARACTER_PLAYED", instanceId: instanceId, controller: playerId, fromZone: originZone, toZone: "CHARACTERS", cause: signalCause });
+    return emit(state, { type: "CHARACTER_PLAYED", subjects: [subject], controller: playerId, fromZone: originZone, toZone: "CHARACTERS", cause: signalCause });
 }
 
 export function playStage(state: GameState, playerId: PlayerId, instanceId: CardInstanceId, signalCause: PlayCause): GameState {
@@ -125,8 +130,9 @@ export function playStage(state: GameState, playerId: PlayerId, instanceId: Card
     if (stageZone.length >= STAGE_MAX) {
         return setDecisionPoint(state, { type: "DISPLACE_CARD", player: playerId, playedCardId: instanceId });
     }
+    const subject = captureSnapshot(state, instanceId);
     state = moveCard(state, instanceId, "STAGE", "TOP");
-    return emit(state, { type: "STAGE_PLAYED", instanceId: instanceId, controller: playerId, fromZone: originZone, toZone: "STAGE", cause: signalCause });
+    return emit(state, { type: "STAGE_PLAYED", subjects: [subject], controller: playerId, fromZone: originZone, toZone: "STAGE", cause: signalCause });
 }
 
 export function displaceCard(state: GameState, playerId: PlayerId, playedCardId: CardInstanceId, replacedId: CardInstanceId): GameState {
@@ -149,14 +155,15 @@ export function displaceCard(state: GameState, playerId: PlayerId, playedCardId:
 
     const originZone = playedCard.currentZone;
     if (!originZone) throw new InvalidActionError(`${playedCardId} does not have a current zone`);
+    const subject = captureSnapshot(state, playedCardId);
     state = removeFromZone(state, playedCardId);
     state = insertCardAtZoneIndex(state, playedCardId, playZoneName, replaceIndex);
 
     if (playZoneName === "CHARACTERS") {
-        state = emit(state, { type: "CHARACTER_PLAYED", instanceId: playedCardId, controller: playerId, fromZone: originZone, toZone: "CHARACTERS", cause: { kind: "PLAYER" } });
+        state = emit(state, { type: "CHARACTER_PLAYED", subjects: [subject], controller: playerId, fromZone: originZone, toZone: "CHARACTERS", cause: { kind: "PLAYER" } });
     }
     if (playZoneName === "STAGE") {
-        state = emit(state, { type: "STAGE_PLAYED", instanceId: playedCardId, controller: playerId, fromZone: originZone, toZone: "STAGE", cause: { kind: "PLAYER" } });
+        state = emit(state, { type: "STAGE_PLAYED", subjects: [subject], controller: playerId, fromZone: originZone, toZone: "STAGE", cause: { kind: "PLAYER" } });
     }
     return state;
 }
@@ -169,9 +176,14 @@ export function playEvent(state: GameState, playerId: PlayerId, instanceId: Card
     if (!originZone) throw new InvalidActionError(`${instanceId} has no origin zone`);
     if (originZone === "TRASH") throw new InvalidActionError(`${instanceId} cannot be played from trash with playEvent function`);
 
+    // One capture, two signals — both describe the same departure from hand, so they
+    // report the same subject. Note the moveCard still comes FIRST: an event must be
+    // in the trash before EVENT_PLAYED fires, or every "if you have N cards in your
+    // trash" card is off by one. See the event-card section in CLAUDE.md.
+    const subject = captureSnapshot(state, instanceId);
     state = moveCard(state, instanceId, "TRASH", "TOP");
-    state = emit(state, { type: "CARDS_SENT_TO_TRASH", instanceIds: [instanceId], fromZone: originZone, controller: playerId, cause: signalCause });
-    return emit(state, { type: "EVENT_PLAYED", instanceId: instanceId, controller: playerId, fromZone: originZone, toZone: "TRASH", cause: signalCause });
+    state = emit(state, { type: "CARDS_SENT_TO_TRASH", subjects: [subject], fromZone: originZone, controller: playerId, cause: signalCause });
+    return emit(state, { type: "EVENT_PLAYED", subjects: [subject], controller: playerId, fromZone: originZone, toZone: "TRASH", cause: signalCause });
 }
 
 
@@ -185,32 +197,45 @@ function _removeCardFromField(state: GameState, playerId: PlayerId, instanceId: 
     if (!fromZone) throw new InvalidActionError(`${instanceId} does not have a current zone`);
     if (!(fromZone === "CHARACTERS" || fromZone === "STAGE")) throw new InvalidActionError(`Cards can only be removed from the field from characters or stage, but ${instanceId} is being removed from ${fromZone}`);
     
+    // Captured at the TOP, ahead of the DON detach — this is the fix for the loss
+    // this function has always had. The detach strips the card's power buff before
+    // anything downstream can read it, so a snapshot taken any later reports a card
+    // that was never on the board in that state.
+    //
+    // One capture serves both this signal and the CARDS_SENT_TO_* below: they
+    // describe the same departure from the field.
+    const subject = captureSnapshot(state, instanceId);
+
     // Detach any attached DON before removing the card from the field
     if (card.attachedDon.length > 0) {
         state = donDetach(state, playerId, instanceId, card.attachedDon, { kind: "RULE" });
     }
 
-    state = emit(state, { type: "CARD_REMOVED_FROM_FIELD", instanceId: instanceId, controller: playerId, removalMethod: method, cause: signalCause });
+    // NOTE: still emitted BEFORE the moveCard below. That ordering is what keeps
+    // On-K.O. effects staging, because the activeZone gate reads the listener's live
+    // zone. Normalising it to mutate-then-emit requires re-authoring On-K.O. effects
+    // to activeZone: TRASH in the same change — see EFFECT_PLAN.md 6a.
+    state = emit(state, { type: "CARD_REMOVED_FROM_FIELD", subjects: [subject], controller: playerId, removalMethod: method, cause: signalCause });
     
     switch (method) {
         case "KO":
             state = moveCard(state, instanceId, "TRASH", "TOP");
-            return emit(state, { type: "CARDS_SENT_TO_TRASH", instanceIds: [instanceId], fromZone: fromZone, controller: playerId, cause: signalCause });
+            return emit(state, { type: "CARDS_SENT_TO_TRASH", subjects: [subject], fromZone: fromZone, controller: playerId, cause: signalCause });
         case "TRASH_CARD":
             state = moveCard(state, instanceId, "TRASH", "TOP");
-            return emit(state, { type: "CARDS_SENT_TO_TRASH", instanceIds: [instanceId], fromZone: fromZone, controller: playerId, cause: signalCause });
+            return emit(state, { type: "CARDS_SENT_TO_TRASH", subjects: [subject], fromZone: fromZone, controller: playerId, cause: signalCause });
         case "BOUNCE_TO_HAND":
             state = moveCard(state, instanceId, "HAND", "TOP");
-            return emit(state, { type: "CARDS_SENT_TO_HAND", instanceIds: [instanceId], fromZone: fromZone, controller: playerId, cause: signalCause });
+            return emit(state, { type: "CARDS_SENT_TO_HAND", subjects: [subject], fromZone: fromZone, controller: playerId, cause: signalCause });
         case "SEND_TO_DECK":
             state = moveCard(state, instanceId, "DECK", position);
-            return emit(state, { type: "CARDS_SENT_TO_DECK", instanceIds: [instanceId], fromZone: fromZone, position: position, controller: playerId, cause: signalCause });
+            return emit(state, { type: "CARDS_SENT_TO_DECK", subjects: [subject], fromZone: fromZone, position: position, controller: playerId, cause: signalCause });
         case "SEND_TO_LIFE":
             state = moveCard(state, instanceId, "LIFE", position);
-            return emit(state, { type: "CARDS_SENT_TO_LIFE", instanceIds: [instanceId], fromZone: fromZone, position: position, controller: playerId, cause: signalCause });
+            return emit(state, { type: "CARDS_SENT_TO_LIFE", subjects: [subject], fromZone: fromZone, position: position, controller: playerId, cause: signalCause });
         case "DISPLACE":
             state = moveCard(state, instanceId, "TRASH", "TOP");
-            return emit(state, { type: "CARDS_SENT_TO_TRASH", instanceIds: [instanceId], fromZone: fromZone, controller: playerId, cause: { kind: "RULE" } });
+            return emit(state, { type: "CARDS_SENT_TO_TRASH", subjects: [subject], fromZone: fromZone, controller: playerId, cause: { kind: "RULE" } });
         default:
             throw new InvalidActionError(`Invalid removal method ${method}`);
     }

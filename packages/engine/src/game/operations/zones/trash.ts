@@ -1,10 +1,12 @@
 import { InvalidActionError } from "../../../errors";
-import type { GameState, PlayerId, CardInstanceId, StackPosition, SignalCause, Zone } from "../../../types";
+import type { CardSnapshot, GameState, PlayerId, CardInstanceId, StackPosition, SignalCause, Zone } from "../../../types";
 import { emit } from "../../emitter";
 import { getCardInstance, getZoneArray, moveCard } from "../../mechanics";
+import { captureSnapshot } from "../../snapshot";
 
 
 export function _cardsMoveToTrash(state: GameState, playerId: PlayerId, instanceIds: CardInstanceId[], fromZone: Zone, signalCause: SignalCause): GameState {
+    const subjects: CardSnapshot[] = [];
     for (const id of instanceIds) {
         const zone = getZoneArray(state, playerId, fromZone);
         if (!zone.includes(id)) {
@@ -12,9 +14,13 @@ export function _cardsMoveToTrash(state: GameState, playerId: PlayerId, instance
         }
         const card = getCardInstance(state, id);
         if (card.class === "DON" || card.class === "LEADER") throw new InvalidActionError(`${id} has a card class of ${card.class} cannot be added to trash`);
+        // Captured BEFORE the move — a character trashed from the field loses its
+        // attached DON on the way out, and this is the last moment its real power
+        // is readable.
+        subjects.push(captureSnapshot(state, id));
         state = moveCard(state, id, "TRASH", "TOP");
     }
-    return emit(state, { type: "CARDS_SENT_TO_TRASH", instanceIds: instanceIds, fromZone: "HAND", controller: playerId, cause: signalCause });
+    return emit(state, { type: "CARDS_SENT_TO_TRASH", subjects: subjects, fromZone: "HAND", controller: playerId, cause: signalCause });
 }
 
 /**

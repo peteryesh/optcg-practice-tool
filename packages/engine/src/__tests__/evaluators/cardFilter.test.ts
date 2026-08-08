@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { evalCardFilter } from "../../evaluator";
+import { captureSnapshot } from "../../game/snapshot";
 import type {
     EvalContext,
     GameState,
@@ -70,9 +71,9 @@ describe("any", () => {
         const c = char();
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([c, don]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "ANY" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "ANY" })).toBe(true);
         // works for DON too — ANY reads nothing from the def
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "ANY" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "ANY" })).toBe(true);
     });
 });
 
@@ -80,19 +81,19 @@ describe("this", () => {
     it("should return true only for the evaluated card", () => {
         const c = char();
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(c.instanceId), c.instanceId, { kind: "THIS" })).toBe(true);
+        expect(evalCardFilter(state, ctx(c.instanceId), captureSnapshot(state, c.instanceId), { kind: "THIS" })).toBe(true);
     });
     it("should return false for other cards", () => {
         const c = char();
         const other = char();
         const state = buildState([c, other]);
-        expect(evalCardFilter(state, ctx(other.instanceId), c.instanceId, { kind: "THIS" })).toBe(false);
+        expect(evalCardFilter(state, ctx(other.instanceId), captureSnapshot(state, c.instanceId), { kind: "THIS" })).toBe(false);
     });
     it("should throw an error if no context is provided", () => {
         const c = char();
         const state = buildState([c]);
         expect(() =>
-            evalCardFilter(state, undefined as unknown as EvalContext, c.instanceId, { kind: "THIS" }),
+            evalCardFilter(state, undefined as unknown as EvalContext, captureSnapshot(state, c.instanceId), { kind: "THIS" }),
         ).toThrow();
     });
 });
@@ -101,45 +102,45 @@ describe("controller", () => {
     it("should return true for cards controlled by self when controller is 'SELF'", () => {
         const c = char({ controller: SELF });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "CONTROLLER", controller: "SELF" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "CONTROLLER", controller: "SELF" })).toBe(true);
     });
     it("should return false for cards controlled by other players when controller is 'SELF'", () => {
         const c = char({ controller: OPP });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "CONTROLLER", controller: "SELF" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "CONTROLLER", controller: "SELF" })).toBe(false);
     });
     it("should return true for cards controlled by other players when controller is 'OPPONENT'", () => {
         const c = char({ controller: OPP });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "CONTROLLER", controller: "OPPONENT" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "CONTROLLER", controller: "OPPONENT" })).toBe(true);
     });
     it("should return false for cards controlled by self when controller is 'OPPONENT'", () => {
         const c = char({ controller: SELF });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "CONTROLLER", controller: "OPPONENT" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "CONTROLLER", controller: "OPPONENT" })).toBe(false);
     });
     it("should return true for cards controlled by any player when controller is 'ANY'", () => {
         const c = char({ controller: OPP });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "CONTROLLER", controller: "ANY" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "CONTROLLER", controller: "ANY" })).toBe(true);
     });
 });
 
 describe("name", () => {
     it("should return true for cards with the specified name", () => {
         const { state, id } = singleChar({ name: "Luffy", aliases: ["Straw Hat Luffy"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "NAME", name: "Luffy" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "NAME", name: "Luffy" })).toBe(true);
         // also matches an alias
-        expect(evalCardFilter(state, ctx(), id, { kind: "NAME", name: "Straw Hat Luffy" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "NAME", name: "Straw Hat Luffy" })).toBe(true);
     });
     it("should return false for cards with a different name", () => {
         const { state, id } = singleChar({ name: "Luffy" });
-        expect(evalCardFilter(state, ctx(), id, { kind: "NAME", name: "Zoro" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "NAME", name: "Zoro" })).toBe(false);
     });
     it("should return false for DON cards", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "NAME", name: "Luffy" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "NAME", name: "Luffy" })).toBe(false);
     });
 });
 
@@ -148,20 +149,20 @@ describe("class", () => {
         const c = char();
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([c, don]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "CLASS", cardClass: "CHARACTER" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "CLASS", cardClass: "CHARACTER" })).toBe(true);
         // DON matches CLASS:DON — class is read from the instance
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "CLASS", cardClass: "DON" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "CLASS", cardClass: "DON" })).toBe(true);
     });
     it("should return false for cards with a different class", () => {
         const c = char();
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "CLASS", cardClass: "EVENT" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "CLASS", cardClass: "EVENT" })).toBe(false);
     });
     it("should return false for DON cards", () => {
         // a DON queried against a non-DON class
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "CLASS", cardClass: "CHARACTER" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "CLASS", cardClass: "CHARACTER" })).toBe(false);
     });
 });
 
@@ -169,17 +170,17 @@ describe("cost", () => {
     it("should return false if the kind is COST and the card is a DON card", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "COST", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "COST", op: ">=", value: 1, base: false })).toBe(false);
     });
     it("should return false if the kind is COST and the card is a LEADER card", () => {
         const leader = makeLeaderInstance();
         const state = buildState([leader]);
-        expect(evalCardFilter(state, ctx(), leader.instanceId, { kind: "COST", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, leader.instanceId), { kind: "COST", op: ">=", value: 1, base: false })).toBe(false);
     });
     it("should read the card's own cost value (not power or counter)", () => {
         const { state, id } = singleChar({ cost: 1, power: 2, counter: 3 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "==", value: 1, base: false })).toBe(true);
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "==", value: 2, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 1, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 2, base: false })).toBe(false);
     });
 });
 
@@ -187,22 +188,22 @@ describe("power", () => {
     it("should return false if the kind is POWER and the card is a DON card", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "POWER", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "POWER", op: ">=", value: 1, base: false })).toBe(false);
     });
     it("should return false if the kind is POWER and the card is an EVENT card", () => {
         const event = makeEventInstance();
         const state = buildState([event]);
-        expect(evalCardFilter(state, ctx(), event.instanceId, { kind: "POWER", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, event.instanceId), { kind: "POWER", op: ">=", value: 1, base: false })).toBe(false);
     });
     it("should return false if the kind is POWER and the card is a STAGE card", () => {
         const stage = makeStageInstance();
         const state = buildState([stage]);
-        expect(evalCardFilter(state, ctx(), stage.instanceId, { kind: "POWER", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, stage.instanceId), { kind: "POWER", op: ">=", value: 1, base: false })).toBe(false);
     });
     it("should read the card's own power value (not cost or counter)", () => {
         const { state, id } = singleChar({ cost: 1, power: 2, counter: 3 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "POWER", op: "==", value: 2, base: false })).toBe(true);
-        expect(evalCardFilter(state, ctx(), id, { kind: "POWER", op: "==", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "POWER", op: "==", value: 2, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "POWER", op: "==", value: 1, base: false })).toBe(false);
     });
 });
 
@@ -211,13 +212,13 @@ describe("counter", () => {
         const leader = makeLeaderInstance();
         const event = makeEventInstance();
         const state = buildState([leader, event]);
-        expect(evalCardFilter(state, ctx(), leader.instanceId, { kind: "COUNTER", op: ">=", value: 1, base: false })).toBe(false);
-        expect(evalCardFilter(state, ctx(), event.instanceId, { kind: "COUNTER", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, leader.instanceId), { kind: "COUNTER", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, event.instanceId), { kind: "COUNTER", op: ">=", value: 1, base: false })).toBe(false);
     });
     it("should read the card's own counter value (not cost or power)", () => {
         const { state, id } = singleChar({ cost: 1, power: 2, counter: 3 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COUNTER", op: "==", value: 3, base: false })).toBe(true);
-        expect(evalCardFilter(state, ctx(), id, { kind: "COUNTER", op: "==", value: 2, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COUNTER", op: "==", value: 3, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COUNTER", op: "==", value: 2, base: false })).toBe(false);
     });
 });
 
@@ -225,71 +226,71 @@ describe("counter", () => {
 describe(">=", () => {
     it("should return true when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: ">=", value: 3, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">=", value: 3, base: false })).toBe(true);
     });
     it("should return true when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: ">=", value: 5, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">=", value: 5, base: false })).toBe(true);
     });
     it("should return false when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: ">=", value: 7, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">=", value: 7, base: false })).toBe(false);
     });
 });
 describe(">", () => {
     it("should return true when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: ">", value: 3, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">", value: 3, base: false })).toBe(true);
     });
     it("should return false when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: ">", value: 7, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">", value: 7, base: false })).toBe(false);
     });
     it("should return false when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: ">", value: 5, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">", value: 5, base: false })).toBe(false);
     });
 });
 describe("<=", () => {
     it("should return true when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "<=", value: 7, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<=", value: 7, base: false })).toBe(true);
     });
     it("should return true when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "<=", value: 5, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<=", value: 5, base: false })).toBe(true);
     });
     it("should return false when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "<=", value: 3, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<=", value: 3, base: false })).toBe(false);
     });
 });
 describe("<", () => {
     it("should return true when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "<", value: 7, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<", value: 7, base: false })).toBe(true);
     });
     it("should return false when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "<", value: 3, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<", value: 3, base: false })).toBe(false);
     });
     it("should return false when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "<", value: 5, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<", value: 5, base: false })).toBe(false);
     });
 });
 describe("=", () => {
     it("should return true when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "==", value: 5, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 5, base: false })).toBe(true);
     });
     it("should return false when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "==", value: 3, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 3, base: false })).toBe(false);
     });
     it("should return false when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COST", op: "==", value: 7, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 7, base: false })).toBe(false);
     });
 });
 
@@ -301,63 +302,63 @@ it.todo("base counter");
 describe("color", () => {
     it("should return true for cards with the specified color", () => {
         const { state, id } = singleChar({ colors: ["RED"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COLOR", color: "RED" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COLOR", color: "RED" })).toBe(true);
     });
     it("should return true for cards with the specified color among multiple colors", () => {
         const { state, id } = singleChar({ colors: ["RED", "GREEN"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COLOR", color: "GREEN" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COLOR", color: "GREEN" })).toBe(true);
     });
     it("should return false for cards with a different color", () => {
         const { state, id } = singleChar({ colors: ["RED"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "COLOR", color: "BLUE" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COLOR", color: "BLUE" })).toBe(false);
     });
 
     it("should return false for DON cards", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "COLOR", color: "RED" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "COLOR", color: "RED" })).toBe(false);
     });
 });
 
 describe("type", () => {
     it("should return true for cards with the specified type", () => {
         const { state, id } = singleChar({ types: ["Straw Hat Crew"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "TYPE", cardType: "Straw Hat Crew" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "TYPE", cardType: "Straw Hat Crew" })).toBe(true);
     });
     it("should return true for cards with the specified type among multiple types", () => {
         const { state, id } = singleChar({ types: ["Straw Hat Crew", "Supernovas"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "TYPE", cardType: "Supernovas" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "TYPE", cardType: "Supernovas" })).toBe(true);
     });
     it("should return false for cards with a different type", () => {
         const { state, id } = singleChar({ types: ["Straw Hat Crew"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "TYPE", cardType: "Navy" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "TYPE", cardType: "Navy" })).toBe(false);
     });
 
     it("should return false for DON cards", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "TYPE", cardType: "Straw Hat Crew" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "TYPE", cardType: "Straw Hat Crew" })).toBe(false);
     });
 });
 
 describe("attribute", () => {
     it("should return true for cards with the specified attribute", () => {
         const { state, id } = singleChar({ attributes: ["SLASH"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "ATTRIBUTE", attribute: "SLASH" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "ATTRIBUTE", attribute: "SLASH" })).toBe(true);
     });
     it("should return true for cards with the specified attribute among multiple attributes", () => {
         const { state, id } = singleChar({ attributes: ["SLASH", "STRIKE"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "ATTRIBUTE", attribute: "STRIKE" })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "ATTRIBUTE", attribute: "STRIKE" })).toBe(true);
     });
     it("should return false for cards with a different attribute", () => {
         const { state, id } = singleChar({ attributes: ["SLASH"] });
-        expect(evalCardFilter(state, ctx(), id, { kind: "ATTRIBUTE", attribute: "RANGED" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "ATTRIBUTE", attribute: "RANGED" })).toBe(false);
     });
 
     it("should return false for DON cards", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "ATTRIBUTE", attribute: "SLASH" })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "ATTRIBUTE", attribute: "SLASH" })).toBe(false);
     });
 });
 
@@ -365,22 +366,22 @@ describe("playable card rested", () => {
     it("should return true for cards that are rested when isRested is true", () => {
         const c = char({ isRested: true });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "RESTED", isRested: true })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "RESTED", isRested: true })).toBe(true);
     });
     it("should return false for cards that are not rested when isRested is true", () => {
         const c = char({ isRested: false });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "RESTED", isRested: true })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "RESTED", isRested: true })).toBe(false);
     });
     it("should return true for cards that are not rested when isRested is false", () => {
         const c = char({ isRested: false });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "RESTED", isRested: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "RESTED", isRested: false })).toBe(true);
     });
     it("should return false for cards that are rested when isRested is false", () => {
         const c = char({ isRested: true });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "RESTED", isRested: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "RESTED", isRested: false })).toBe(false);
     });
 });
 
@@ -388,22 +389,22 @@ describe("don rested", () => {
     it("should return true for DON cards that are in the rested zone when isRested is true", () => {
         const don = makeDonInstance({ currentZone: "DON_RESTED" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "RESTED", isRested: true })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "RESTED", isRested: true })).toBe(true);
     });
     it("should return false for DON cards that are not in the rested zone when isRested is true", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "RESTED", isRested: true })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "RESTED", isRested: true })).toBe(false);
     });
     it("should return true for DON cards that are not in the rested zone when isRested is false", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "RESTED", isRested: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "RESTED", isRested: false })).toBe(true);
     });
     it("should return false for DON cards that are in the rested zone when isRested is false", () => {
         const don = makeDonInstance({ currentZone: "DON_RESTED" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "RESTED", isRested: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "RESTED", isRested: false })).toBe(false);
     });
 });
 
@@ -412,41 +413,41 @@ describe("deck card flipped in life", () => {
     it("should return true for cards that are flipped when isFlipped is true", () => {
         const c = char({ currentZone: "LIFE", flipped: true });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "FLIPPED", isFlipped: true })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "FLIPPED", isFlipped: true })).toBe(true);
     });
     it("should return false for cards that are not flipped when isFlipped is true", () => {
         const c = char({ currentZone: "LIFE", flipped: false });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "FLIPPED", isFlipped: true })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "FLIPPED", isFlipped: true })).toBe(false);
     });
     it("should return true for cards that are not flipped when isFlipped is false", () => {
         const c = char({ currentZone: "LIFE", flipped: false });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "FLIPPED", isFlipped: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "FLIPPED", isFlipped: false })).toBe(true);
     });
     it("should return false for cards that are flipped when isFlipped is false", () => {
         const c = char({ currentZone: "LIFE", flipped: true });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "FLIPPED", isFlipped: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "FLIPPED", isFlipped: false })).toBe(false);
     });
 
     it("should return false for a flipped card outside the life zone (rule only applies in life)", () => {
         const c = char({ currentZone: "CHARACTERS", flipped: true });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "FLIPPED", isFlipped: true })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "FLIPPED", isFlipped: true })).toBe(false);
     });
 
     it("should return false for DON cards regardless of isFlipped value", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "FLIPPED", isFlipped: true })).toBe(false);
-        expect(evalCardFilter(state, ctx(), don.instanceId, { kind: "FLIPPED", isFlipped: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "FLIPPED", isFlipped: true })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "FLIPPED", isFlipped: false })).toBe(false);
     });
     it("should return false for LEADER cards regardless of isFlipped value", () => {
         const leader = makeLeaderInstance();
         const state = buildState([leader]);
-        expect(evalCardFilter(state, ctx(), leader.instanceId, { kind: "FLIPPED", isFlipped: true })).toBe(false);
-        expect(evalCardFilter(state, ctx(), leader.instanceId, { kind: "FLIPPED", isFlipped: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, leader.instanceId), { kind: "FLIPPED", isFlipped: true })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, leader.instanceId), { kind: "FLIPPED", isFlipped: false })).toBe(false);
     });
 });
 
@@ -454,7 +455,7 @@ describe("and", () => {
     it("should return true when all filters are true", () => {
         const c = char({ controller: SELF });
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, {
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), {
             kind: "AND",
             filters: [
                 { kind: "CLASS", cardClass: "CHARACTER" },
@@ -465,7 +466,7 @@ describe("and", () => {
     it("should return false when any filter is false", () => {
         const c = char();
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, {
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), {
             kind: "AND",
             filters: [
                 { kind: "ANY" },
@@ -476,7 +477,7 @@ describe("and", () => {
     it("should return true if empty filters array is provided", () => {
         const c = char();
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "AND", filters: [] })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "AND", filters: [] })).toBe(true);
     });
 });
 
@@ -484,7 +485,7 @@ describe("or", () => {
     it("should return true when any filter is true", () => {
         const c = char();
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, {
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), {
             kind: "OR",
             filters: [
                 { kind: "CLASS", cardClass: "EVENT" },
@@ -495,7 +496,7 @@ describe("or", () => {
     it("should return false when all filters are false", () => {
         const c = char();
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, {
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), {
             kind: "OR",
             filters: [
                 { kind: "CLASS", cardClass: "EVENT" },
@@ -506,7 +507,7 @@ describe("or", () => {
     it("should return false if empty filters array is provided", () => {
         const c = char();
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, { kind: "OR", filters: [] })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), { kind: "OR", filters: [] })).toBe(false);
     });
 });
 
@@ -514,14 +515,14 @@ describe("not", () => {
     it("should return true when the filter is false", () => {
         const c = char();
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, {
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), {
             kind: "NOT", filter: { kind: "CLASS", cardClass: "EVENT" },
         })).toBe(true);
     });
     it("should return false when the filter is true", () => {
         const c = char();
         const state = buildState([c]);
-        expect(evalCardFilter(state, ctx(), c.instanceId, {
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), {
             kind: "NOT", filter: { kind: "ANY" },
         })).toBe(false);
     });

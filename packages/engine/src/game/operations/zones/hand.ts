@@ -1,18 +1,23 @@
 import { InvalidActionError } from "../../../errors";
-import { GameState, PlayerId, SignalCause, CardInstanceId, Zone, StackPosition } from "../../../types";
+import { CardSnapshot, GameState, PlayerId, SignalCause, CardInstanceId, Zone, StackPosition } from "../../../types";
 import { emit } from "../../emitter";
 import { getCardInstance, getZoneArray, moveCard } from "../../mechanics";
+import { captureSnapshot } from "../../snapshot";
 
 
 export function _cardsMoveToHand(state: GameState, playerId: PlayerId, instanceIds: CardInstanceId[], fromZone: Zone, signalCause: SignalCause): GameState {
+    const subjects: CardSnapshot[] = [];
     for (const id of instanceIds) {
         const zone = getZoneArray(state, playerId, fromZone);
         if (!zone.includes(id)) throw new InvalidActionError(`${id} not found in zone ${fromZone} of player ${playerId}`);
         const card = getCardInstance(state, id);
         if (card.class === "DON" || card.class === "LEADER") throw new InvalidActionError(`${id} has a card class of ${card.class} cannot be added to hand`);
+        // Before the move: a character bounced off the field reads base stats once it
+        // is in hand, so the on-field power is only recoverable from here.
+        subjects.push(captureSnapshot(state, id));
         state = moveCard(state, id, "HAND", "TOP");
     }
-    return emit(state, { type: "CARDS_SENT_TO_HAND", instanceIds: instanceIds, fromZone: fromZone, controller: playerId, cause: signalCause });
+    return emit(state, { type: "CARDS_SENT_TO_HAND", subjects: subjects, fromZone: fromZone, controller: playerId, cause: signalCause });
 }
 
 /**

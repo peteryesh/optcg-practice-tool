@@ -206,7 +206,7 @@ export function placeCard(
 // while it sits on the field, and does nothing. Override only the part under test.
 export function makeEffectDef(overrides: Partial<EffectDef> = {}): EffectDef {
     return {
-        activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "THIS" } }],
+        activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY_OF", filter: { kind: "THIS" } } }],
         activeZone: "CHARACTERS",
         oncePerTurn: false,
         steps: [],
@@ -355,6 +355,9 @@ export function makeEffectContext(overrides: Partial<EffectContext> = {}): Effec
         playerId: "p1",
         effectId: "effect-1",
         instanceId: "card-1",
+        // Defaults to the "activated, carries nothing" case — correct for any test
+        // whose effect is not about its subjects. Override to assert on them.
+        subjects: [],
         cursor: 0,
         locals: {},
         steps: [],

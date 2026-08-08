@@ -5,7 +5,7 @@ export const op13: Record<CardId, Record<EffectId, EffectDef>> = {
     // Izo — [On Play] Draw 2 cards.
     "OP13-041": {
         onPlay: {
-            activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "THIS" } }],
+            activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY_OF", filter: { kind: "THIS" } } }],
             activeZone: "CHARACTERS",
             oncePerTurn: false,
             steps: [

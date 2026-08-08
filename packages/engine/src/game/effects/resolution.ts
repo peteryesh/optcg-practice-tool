@@ -12,6 +12,12 @@ export function evalContextOf(effectContext: EffectContext): EvalContext {
     return {
         self: effectContext.playerId,
         source: effectContext.instanceId,
+        // A resolving effect ALWAYS has a signal in scope, so this is always present —
+        // possibly `[]`, which means the signal named nothing, not that there was no
+        // signal. Dropping this line is the silent failure in the whole chain: every
+        // SUBJECT_COUNT would start throwing "no activating signal" instead of
+        // counting.
+        subjects: effectContext.subjects,
     };
 }
 

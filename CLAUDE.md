@@ -135,14 +135,24 @@ submodules.
   everything), and `causeKind`/`source` are deliberately separate — a `CardFilter`
   alone cannot tell "caused by a player" from "caused by an effect", since with no
   `sourceId` to test it simply fails. `cause` is mandatory on every signal.
-- **Activation is meant to run in two tiers**, and does not yet. Tier 1 is
-  signal-level (`signal`, `causeKind`, `fromZone`, `source`) — cheap predicates that
-  touch no cards. Tier 2 is subject selection, the only tier that produces a value.
-  Today the subject filter runs *first*, and worse, the gate is **derived from** the
-  payload (`matched.length === 0 → null`), so "activated, carries nothing" is
-  unrepresentable and subject-less signals can never stage. The target contract is
-  `null` = did not activate, `[]` = activated and carries nothing, non-empty =
-  carries these. See `EFFECT_PLAN.md` milestone 1b.
+- **Activation runs in two tiers.** Tier 1 is signal-level (`signal` plus the
+  `SignalPredicates` bag: `causeKind`, `fromZone`, `source`, `phase`) — cheap
+  predicates that touch no cards. Tier 2 is subject selection via `SubjectMatch`
+  (`ANY_OF`/`ALL_OF`), the only tier that produces a value. `selectSubjects` in
+  [emitter.ts](packages/engine/src/game/emitter.ts) owns the contract: `null` = did
+  not activate, `[]` = activated and carries nothing, non-empty = carries these. The
+  middle case is what lets a subject-less signal stage at all. `ALL_OF` must reject
+  the empty set, or it is vacuously true and fires on every signal that named nothing.
+- **`SignalActivation` is discriminated structurally** on
+  `Extract<GameSignal, { subjects }>`, so a phase-keyed activation has no `subject`
+  field *because the type says so* — no hand-maintained list to drift.
+- **Battle is deliberately not modelled as subjects.** Combat signals name cards in
+  several roles (attacker vs defender), carry no `subjects`, and fall into the
+  subject-less arm, where `selectSubjects` **throws** if a card listens for one. That
+  throw is a permanent design assertion, not a migration gap: "when attacking" and "on
+  opponent's attack" are **phase-keyed**, watching a `BattlePhase` through the `phase`
+  predicate and reading `state.currentBattle` at resolution. Never "fix" it by pushing
+  combat into the flat-subjects arm.
 - **A *subject* is a card the signal is about, captured as of the instant the
   signal's cause was determined** — identity, computed state at capture, and an
   optional role. Today subjects are live ids *derived* from the signal by
@@ -254,16 +264,38 @@ what these three sites are reaching for. **The fix is to move the *capture* earl
 the *emit*** — once a subject carries a snapshot, the two decouple and all three
 normalise to mutate-then-emit with nothing lost.
 
-The capture rule is not "head of the operation" (a draw knows a count, not which
-cards), and **not "always before the mutation"** — capture `CHARACTER_PLAYED` before
-the move and the captured zone is `HAND`, breaking every On-Play effect. It is:
-**capture at the point where the state the signal describes is true.** Entry signals
-describe the post-move world; exit signals describe the pre-move one.
+**The capture rule: always pre-mutation.** A subject is the card as it was
+immediately before the cause took effect — one rule, no entry/exit split (settled
+2026-08-07, superseding "capture at the point where the state the signal describes is
+true"). Signals are past-tense and descriptive, so this is just what last-known
+information means.
 
-Corollary: the activeZone gate reads the listener's **captured** zone when the
-listener is one of the signal's subjects, and its live zone otherwise. That handles
-On-Play and On-K.O. with one rule and removes the need for a `fromZone` special-case
-on exit effects.
+The reason there is no post-mutation case: **you never need a snapshot to read
+post-mutation state, because the live board already is that state.** Snapshots exist
+solely to preserve what the mutation destroys. A post-capture snapshot is a frozen
+copy of a board you could still read. Concretely, `_removeCardFromField` detaches DON
+*before* it emits, so `CARD_REMOVED_FROM_FIELD` is already lossy for computed power
+today — pre-capture fixes that and post-capture cannot.
+
+Capture is **not** "head of the operation" — `cardsDraw` knows a count, not which
+instances, so there is no subject set to snapshot until the deck has been read.
+Head-of-operation is where the *prevention* hook goes (milestone 6b); the two are
+different positions and fusing them breaks the draw case.
+
+Corollary — **`activeZone` is the zone the listener is in at emit time, and the gate
+keeps reading the LIVE zone.** Once every site is mutate-then-emit that is uniform with
+no special-casing: On-Play is `CHARACTERS` (moved, then emitted), an event is `TRASH`
+(the convention documented above), and On-K.O. becomes `TRASH` for the same reason. The
+On-K.O. row is the only change, and nothing is authored against it yet — but it must
+land in the *same change* as the emit reordering, because the failure is silent staging.
+
+Two alternatives were rejected. Reading the **captured** zone breaks On-Play: under
+pre-capture that is `HAND`, which fails against `activeZone: CHARACTERS`. Narrowing
+On-K.O. with `fromZone: [CHARACTERS]` fails too — the activeZone gate runs *before* the
+activation is consulted, so a card already in `TRASH` is filtered out whatever the
+activation says, and `CARD_REMOVED_FROM_FIELD` carries no `fromZone` field for it to
+match. None is needed: that signal only fires for field departures, and `removalMethod`
+discriminates K.O. from bounce within it.
 
 ### Card data
 

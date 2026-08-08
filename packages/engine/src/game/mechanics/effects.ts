@@ -1,17 +1,35 @@
 import { produce } from "immer";
-import { CardInstanceId, EffectContext, EffectDef, EffectId, EffectRef, GameState, PlayerId } from "../../types";
-import { getCardDef, getCardInstance } from "./helpers";
+import { CardInstanceId, CardSnapshot, EffectContext, EffectId, GameState, PlayerId } from "../../types";
+import { getCardDef } from "./helpers";
 
-export function stageEffectRef(state: GameState, playerId: PlayerId, instanceId: CardInstanceId, effectId: EffectId, subjects: CardInstanceId[]): GameState {
+// Builds the effect in its FINAL shape at staging. There is no lighter intermediate
+// form to promote from later — see the note on EffectContext for why the reference
+// split was removed.
+//
+// `steps` and `condition` are references into the card definition, which is immutable
+// for the life of the game, so this allocates a small object and nothing more.
+//
+// `subjects` arrives already filtered by the activation's SubjectMatch and is stored
+// verbatim. Storing it here rather than re-deriving it at resolution is the point: by
+// then the board has moved on, and re-running the filter would read a post-mutation
+// world. What the effect carries is what satisfied the filter at signal time.
+export function stageEffect(state: GameState, playerId: PlayerId, instanceId: CardInstanceId, effectId: EffectId, subjects: CardSnapshot[]): GameState {
     const cardDef = getCardDef(state, instanceId);
     if (!cardDef.effectDefs) throw new Error(`${instanceId} does not have an effect on its card definition on ${cardDef.id}`);
-    const effectRef = {
-        cardId: cardDef.id,
+    const effectDef = cardDef.effectDefs[effectId];
+    if (!effectDef) throw new Error(`${cardDef.id} has no effect ${effectId}`);
+    const effectContext: EffectContext = {
+        playerId: playerId,
         effectId: effectId,
-        instanceId: instanceId
-    }
+        instanceId: instanceId,
+        condition: effectDef.condition,
+        steps: effectDef.steps,
+        subjects: subjects,
+        cursor: 0,
+        locals: {},
+    };
     return produce(state, draft => {
-        draft.stagingFrame[playerId].push(effectRef);
+        draft.stagingFrame[playerId].push(effectContext);
     })
 }
 
@@ -28,17 +46,22 @@ export function removeCurrentFrame(state: GameState): GameState {
     });
 }
 
-export function promoteEffect(state: GameState, effectRef: EffectRef): GameState {
-    const card = getCardInstance(state, effectRef.instanceId);
-    const effectDefs = state.definitions[effectRef.cardId].effectDefs;
-    if (!effectDefs) throw new Error(`No effect def found for card id ${effectRef.cardId}`);
+// Move an already-built effect out of the queue and make it current. No transform:
+// the object in the frame IS the object that resolves.
+//
+// The index is computed against `state` rather than `draft` on purpose. Immer hands
+// back proxies for drafted elements, so `draft.array.indexOf(original)` would never
+// match; reading the plain array first lets object identity do the work. Identity is
+// also what makes this exact — matching on `instanceId` alone picked the wrong entry
+// whenever one card staged two effects.
+export function promoteEffect(state: GameState, effectContext: EffectContext): GameState {
     if (!state.effectQueue[0]) throw new Error(`No effect frame found in the queue`);
+    const playerId = effectContext.playerId;
+    const idx = state.effectQueue[0][playerId].indexOf(effectContext);
+    if (idx < 0) throw new Error(`Effect ${effectContext.effectId} on ${effectContext.instanceId} is not in the current frame for ${playerId}`);
     return produce(state, draft => {
-        const idx = state.effectQueue[0][card.controller].map(ref => ref.instanceId).indexOf(effectRef.instanceId);
-        if (idx < 0) throw new Error(`No effect ref that matched instance ${card.instanceId}`)
-        draft.effectQueue[0][card.controller].splice(idx, 1);
-        const effectDef = effectDefs[effectRef.effectId];
-        draft.currentEffect = buildCurrentEffect(state, effectRef, effectDef);
+        draft.effectQueue[0][playerId].splice(idx, 1);
+        draft.currentEffect = effectContext;
     });
 }
 
@@ -53,16 +76,4 @@ export function advanceEffectCursor(state: GameState): GameState {
         if (!draft.currentEffect) throw new Error(`Cannot advance the cursor with no current effect`);
         draft.currentEffect.cursor += 1;
     });
-}
-
-function buildCurrentEffect(state: GameState, effectRef: EffectRef, effectDef: EffectDef): EffectContext {
-    return {
-        playerId: getCardInstance(state, effectRef.instanceId).controller,
-        effectId: effectRef.effectId,
-        instanceId: effectRef.instanceId,
-        condition: effectDef.condition,
-        steps: effectDef.steps,
-        cursor: 0,
-        locals: {}
-    }
 }

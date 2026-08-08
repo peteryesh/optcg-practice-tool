@@ -1,8 +1,20 @@
 import type { CardClass, Color, Attribute, Zone, CardInstanceId, PlayerId } from './primitives';
+import type { CardSnapshot } from './card';
 
 export type EvalContext = {
     self: PlayerId;
     source: CardInstanceId;
+    /**
+     * What the activating signal was about, if there IS an activating signal in scope.
+     *
+     * OPTIONAL, and the distinction is load-bearing: absent means "no signal in
+     * scope", which is NOT the same as "the signal named nothing" (that is `[]`). Two
+     * callers are legitimately signal-less — the staging gate, which is still deciding
+     * what the subjects are, and `StatusEffectDef.affects`, which never has one.
+     * Handing those `[]` would make `SUBJECT_COUNT` answer 0 instead of reporting that
+     * the question was unanswerable.
+     */
+    subjects?: CardSnapshot[];
 };
 
 export type CardFilter =
@@ -29,6 +41,11 @@ export type CardFilter =
 export type AmountExpression =
     | { kind: "LITERAL"; value: number } // literal number, hard coded
     | { kind: "COUNT"; zones: Zone[]; filter: CardFilter } // count based on some game state value
+    // How many subjects the activating signal carried — "draw 1 for each card
+    // trashed". A BARE LEAF on purpose: it has no `filter`, because the subjects were
+    // already filtered by the activation's SubjectMatch, and re-narrowing them here
+    // would read a post-mutation board. Scaling is MULTIPLY(SUBJECT_COUNT, LITERAL n).
+    | { kind: "SUBJECT_COUNT" }
     | { kind: "ADD"; left: AmountExpression; right: AmountExpression }
     | { kind: "SUBTRACT"; left: AmountExpression; right: AmountExpression }
     | { kind: "MULTIPLY"; left: AmountExpression; right: AmountExpression }

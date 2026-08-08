@@ -5,7 +5,7 @@ export const op04: Record<CardId, Record<EffectId, EffectDef>> = {
     // King — [On Play] Draw 1 card.
     "OP04-045": {
         onPlay: {
-            activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "THIS" } }],
+            activation: [{ signal: "CHARACTER_PLAYED", subject: { kind: "ANY_OF", filter: { kind: "THIS" } } }],
             activeZone: "CHARACTERS",
             oncePerTurn: false,
             steps: [
