@@ -1,97 +1,124 @@
 # Effect system build plan
 
-## Where things stand
+## Where things stand — 2026-08-08
 
-**The On-Play draw slice is COMPLETE** (Phase 1, 2026-07-25). `reducer(state, PLAY_CARD)` takes an
-On-Play character from hand through staging → commit → promotion → `advanceEffect` →
-`executeResolution` → `cardsDraw` → back to `MAIN_ACTION`, in one call. Two real cards
-(`OP04-045` King, `OP13-041` Izo) authored in `src/cards/` and tested against the real registry.
+**276 pass / 0 fail. Engine typechecks clean.** Verified against the code, not inferred.
 
-Everything else is stubbed. `REQUIREMENT`/`PAYMENT` throw from the stepper; every
-`EffectOperation` but `DRAW` throws; `evalBoardCondition`/`evalTargetExpression` unwritten so
-`def.condition` is a commented stub; `oncePerTurn` never read; `signalSubjects` throws on combat
-signals.
+Working end to end:
 
-**6a step 1 LANDED, 2026-08-07.** Movement and play signals now carry `subjects: CardSnapshot[]`,
-captured pre-mutation. Baseline **266 pass / 0 fail**, engine typechecks clean. What shipped:
+- **The On-Play draw slice.** `reducer(state, PLAY_CARD)` runs staging → commit → promotion →
+  `advanceEffect` → `executeResolution` → `cardsDraw` → `MAIN_ACTION` in one call. Two real cards
+  (`OP04-045` King, `OP13-041` Izo) in `src/cards/`, tested against the real registry.
+- **The subject channel** (milestone 1, complete). Snapshots captured pre-mutation, carried on the
+  signal, filtered by `SubjectMatch`, stored on the `EffectContext`, read by `SUBJECT_COUNT`.
+  `subjectCount.test.ts` exercises the whole chain on one hypothetical card.
+- **Two-tier activation** (1b). `SignalPredicates` then `SubjectMatch`, with `selectSubjects` owning
+  the `null` / `[]` / non-empty contract. Phase-keyed effects stage.
 
-- `CardSnapshot` (`types/card.ts`) and `captureSnapshot` (`game/snapshot.ts`) — identity, zone at
-  capture, and every mutable field in both derived and base form. Printed data stays out, recovered
-  via `cardId`, because `state.definitions` is immutable for the life of the game.
-- `evalCardFilter` takes a `CardSnapshot` instead of an id — the universal-input decision, so
-  activation and live evaluation share one path. Live callers wrap in `captureSnapshot`.
-- Converted: `CARDS_SENT_TO_{TRASH,HAND,DECK,LIFE,LOOK}`, `CARD_SENT_TO_TRIGGER`,
-  `{CHARACTER,STAGE,EVENT}_PLAYED`, `CARD_REMOVED_FROM_FIELD`. `signalSubjects` is now a shim: it
-  returns `signal.subjects` when present, `[]` for `PHASE_CHANGED`, throws otherwise.
-- `_removeCardFromField`'s DON-detach loss is **fixed** — one capture at the head of the operation
-  feeds both `CARD_REMOVED_FROM_FIELD` and the `CARDS_SENT_TO_*` after the move, pinned by a test that
-  asserts the subject reports 5001 power while live state reports 5000.
+Still stubbed, confirmed by grep:
 
-Still open from step 1: emit ordering at the three early sites is **unchanged**, deliberately —
-normalising it requires re-authoring On-K.O. to `activeZone: TRASH` in the same change. `subjects` is
-accepted by `stageEffect` but not yet written onto the context (that is 1a, now a one-line change).
-
-**`EffectRef` DELETED, 2026-08-07.** `EffectContext` is built once at staging and carried unchanged
-through the frame, the queue and resolution — no intermediate reference form, no transform at
-promotion. The split bought nothing: `steps` was already a reference into the immutable definition
-rather than a copy, so the "cheap" form saved no allocation, and promotion had to construct the real
-object anyway. Three consequences:
-
-- `promoteEffect` splices by **object identity**, which is exact. Half of milestone 4's identity bug
-  is gone (see there for what remains). Note the immer detail recorded in the code: the index is
-  computed against `state`, not `draft`, because `draft.array.indexOf(original)` never matches a
-  proxied element.
-- `stageEffectRef` → `stageEffect`; `buildCurrentEffect` and `EffectRef.cardId` deleted.
-- Forward-compatible with resumability: if an effect ever has to leave `currentEffect` and re-enter a
-  queue mid-resolution, a reference form would have had to grow `cursor` and `locals` anyway — i.e.
-  become a context.
-
-Naming note: with one type spanning activation through completion, `PendingEffect` would be wrong for
-half its life. If `EffectContext` is ever renamed, `ActivatedEffect` is the candidate — "context" is
-doing no work in the current name. Not done; it touches the stepper, `evalContextOf` and
-`currentEffect`, so it belongs with milestone 4 rather than on its own.
-
-**Direction change, 2026-08-07.** Subjects move *onto the signals* as captured snapshots rather than
-being derived from them at emit time. Rationale under "Subjects live on the signal"; the reversal it
-supersedes is noted in the pre-operation workstream.
-
-**Ordering, 2026-08-07 (revised — this supersedes "1a ships now").** 6a goes FIRST. The earlier call
-was that 1a's items are agnostic to id-vs-snapshot and could ship ahead; that is true of their code
-*shape* and false of three things that matter: 6a replaces the producer 1a's consumer chain reads
-from, 6a changes `evalCardFilter`'s signature (`CardSnapshot` becomes its universal input) so any
-call site 1a adds gets rewritten, and 1a's last item fixes a `signalSubjects` test that 6a deletes.
-6a is also net deletion, so doing it first means the 1a chain gets written once, into a smaller
-codebase, against the final shape. **The `type Subject = CardInstanceId` alias is dropped** — its
-whole purpose was to localize a swap that no longer happens.
-
-Working order:
-
-1. ~~**6a for movement + play signals only**~~ — **DONE 2026-08-07**
-2. ~~**The 1a consumer chain**~~ — **DONE 2026-08-07**
-3. ~~**The driving card**~~ — **DONE 2026-08-07**, `subjectCount.test.ts`
-4. ~~**1b**~~ — **DONE 2026-08-07**, ahead of schedule; the shim is already deleted
-5. **NEXT: milestone 4**, two effects coexisting. It hard-deadlocks today and the
-   phase-keyed battle design walks straight into it ("on opponent's attack" queues every listener
-   into one frame). The internal half of the identity bug is already gone with `EffectRef`; what
-   remains is `CHOOSE_NEXT_EFFECT` needing the composite `(instanceId, effectId)` key.
-6. Then payments — which is what makes the battle-abandonment rule reachable — and milestones 2, 3, 5
-   in the order milestone 3's survey decides.
-
-**The remaining signal categories were dropped from the plan, not deferred.** Combat is deliberately
-never converting (phase-keyed instead, see 1b); the DON signals convert if a card needs them. There is
-no migration left to finish, so `selectSubjects`' throw is a permanent assertion rather than a
-tracker.
-
-Step 3 is what keeps 6a from landing as "it compiles and stages, and nothing proves the payload is
-right" — the reason 1a-first was attractive, preserved without the rework.
-
-**6b (prevention / replacement) is explicitly deferred, 2026-08-07.** Not just unscheduled — off the
-table until the rest lands. A cancelled operation has to unwind back into whatever invoked it, and
-that control-flow question is not worth opening while the subject channel is still being built.
+| what | where |
+|---|---|
+| `CHOOSE_NEXT_EFFECT`, `CHOOSE_TARGETS` throw | `reducer.ts:80,82` + validator + actionGen |
+| `ACTIVATE_EFFECT` throws | `game/actions/main.ts:57` |
+| `REQUIREMENT` / `PAYMENT` steps throw | `game/effects/stepper.ts:32` |
+| `LOOK` / `ADD_TO_HAND` / `REORDER` throw; no K.O. op exists at all | `game/effects/resolution.ts:48` |
+| `evalBoardCondition`, `evalTargetExpression` — **do not exist** | so `def.condition` is never read |
+| `oncePerTurn`, `optional` | never read |
+| Blocker | `validator.ts:148` |
 
 ---
 
+# What's left, in order
+
+**This section is the roadmap. Everything below it is rationale.**
+
+## 1. Milestone 4 — two effects coexisting *(FORCED NEXT)*
+
+The only item that breaks a real game rather than merely limiting it. Two effects staging off one
+signal sets `RESOLVE_EFFECT_ORDER`, which no action can answer, and the game **deadlocks**. The
+phase-keyed battle design walks straight into it, since "on opponent's attack" queues every listener
+into one frame.
+
+Needs the composite `(instanceId, effectId)` key on `CHOOSE_NEXT_EFFECT`. The *internal* half of the
+identity bug is already gone — `promoteEffect` splices by object identity since `EffectRef` was
+collapsed — so what remains is the player-facing selection path.
+
+## 2. Milestone 3 — the corpus survey
+
+Its explicit job is to decide the order of everything below, and right now that order is guesswork.
+2,631 cards with `raw_effect` are sitting in the database waiting to be clustered by ability keyword
+and verb. Worth doing *before* committing to the expensive items, not after.
+
+## 3. The rest of the skeleton
+
+Ordered by best current guess; milestone 3 supersedes this.
+
+| | what it needs | notes |
+|---|---|---|
+| **Conditions** (m5) | `evalBoardCondition`, wire `def.condition` at resolution | Cheapest of the four, unblocks "draw 1 if you have 8+ DON". `BoardCondition.ZONE_SIZE` must be **replaced** by a compare leaf over two `AmountExpression`s — it has no operator and no controller scoping. **Delete** the commented stub at `emitter.ts:50`; it is in the wrong place |
+| **Targeting** | `evalTargetExpression`, `CHOOSE_TARGETS`, the DecisionPoint projection | Biggest single piece. Most cards need it. Blocks payments |
+| **Payments** | `PAYMENT` step, 7 `EffectCost` kinds, the abort branch | **Depends on targeting** — `EffectCost.target` is a `TargetExpression`. Makes the battle-abandonment rule reachable |
+| **Requirements** | `REQUIREMENT` step | Depends on conditions |
+| **Resolution ops** | `LOOK`, `ADD_TO_HAND`, `REORDER`, and a K.O. op | Each is its own gate + tests |
+| **`oncePerTurn` / `optional`** | the consumption boundary | invariant 3 |
+| **ChoiceStep** | `goto` + labels | the modal keystone |
+| **Status effects** | apply / read / expire, wired into power/cost/counter calc | also unblocks the `base` flag work |
+
+## 4. Independent — slot in anytime
+
+- **`tsconfig.json` for `packages/engine`.** Tests are **never typechecked** today: the engine has no
+  tsconfig and `apps/sleapy-web` includes only its own `src`, so engine source is checked transitively
+  while `__tests__` is checked by nothing. Two conditional types in a test helper silently resolved to
+  `never` and nothing complained. Will likely surface existing errors, so give it its own change.
+- **Battle abandonment guard** — rule settled and written up below, not built. Two holes:
+  `conductor.ts` `BLOCKER` case's non-null assertion, and `resolveBattle`'s class-only "corrupt" check
+  that a trashed character passes.
+- **`base` flag on stat filters** — snapshots carry both forms now, so it is one line per branch.
+- **Rename `activate` → `invoke`** (`EFFECT_ACTIVATED`→`EFFECT_INVOKED`, `ACTIVATE_EFFECT`→
+  `INVOKE_EFFECT`). Never "trigger".
+- **Milestone 2** — playing into a full character zone routes `CHARACTER_PLAYED` through
+  `displaceCard` rather than `playCharacter`. Untested path, ordinary mid-game state.
+- **Rename `EffectContext` → `ActivatedEffect`**, optional. "Context" does no work; the type now spans
+  activation through completion. Touches the stepper, `evalContextOf`, `currentEffect` — belongs with
+  milestone 4 if it happens at all.
+
+## 5. Dropped, not deferred
+
+- **Roles / a third activation arm.** Combat is phase-keyed by decision (2026-08-07): "when attacking"
+  and "on opponent's attack" watch a `BattlePhase` and read `state.currentBattle` at resolution. Add
+  the arm only if a real card proves it necessary.
+- **The remaining signal migration.** Nothing left to convert. Combat never converts; DON converts
+  only if a card needs it. `selectSubjects`' throw is a permanent design assertion, **not** a tracker.
+- **6b prevention / replacement.** Off the table until the rest lands — a cancelled operation has to
+  unwind into whatever invoked it, and that is not worth opening now.
+
+---
+
+# Shipped — 2026-08-07
+
+Condensed; the durable rationale lives in the settled-decisions sections below and in the code.
+
+- **Subjects move onto signals as pre-mutation snapshots.** `CardSnapshot` + `captureSnapshot`;
+  `evalCardFilter` takes a snapshot as its universal input so activation and live evaluation share one
+  path. Converted: `CARDS_SENT_TO_{TRASH,HAND,DECK,LIFE,LOOK}`, `CARD_SENT_TO_TRIGGER`,
+  `{CHARACTER,STAGE,EVENT}_PLAYED`, `CARD_REMOVED_FROM_FIELD`. `signalSubjects` **deleted**.
+- **`_removeCardFromField`'s DON-detach loss fixed** — one capture at the head of the operation feeds
+  both signals, pinned by a test asserting the subject reports 5001 power while live state reports
+  5000.
+- **`EffectRef` deleted**, collapsed into `EffectContext` built once at staging. `steps` was already a
+  reference into the immutable definition, so the "cheap" form saved no allocation and promotion had
+  to construct the real object anyway. `promoteEffect` now splices by object identity — computing the
+  index against `state`, never `draft`, since immer proxies drafted elements.
+- **1b**: `SubjectMatch`, `SignalPredicates` (incl. `phase`), `SignalActivation` discriminated on
+  `Extract<GameSignal, { subjects }>`, `selectSubjects`, tier reorder, gate/payload split.
+- **Emit ordering at the three early sites is UNCHANGED, deliberately.** Normalising it requires
+  re-authoring On-K.O. to `activeZone: TRASH` in the same change — see the corollary under 6a.
 # The plan — milestones and why
+
+*Rationale, not sequencing. "What's left, in order" above is the roadmap; these sections explain why
+each milestone exists and record what was decided while building it. Milestone NUMBERS are stable
+identifiers, not an order — 6a shipped before 1a, and 1b before 4.*
 
 ## 1. Give effects access to their subject — **COMPLETE, 2026-08-07**
 
@@ -669,13 +696,12 @@ requirement, and silently breaks *"if you have 15 or more cards in your trash"* 
   `subject`, listener-as-own-subject, keying phase effects off something other than `activation`)
   are rejected — each papers over a derivation that should not exist.
 - **`EFFECT_INVOKED` timing** — main-phase-only vs a general timing marker.
-- **`SUBJECT_COUNT` shape.** Bare leaf (`{ kind: "SUBJECT_COUNT" }` → `subjects.length`, throw when
-  absent) vs a `filter?: CardFilter` re-narrowing at consumption time. The leaf is recommended:
-  scaling is already `MULTIPLY(SUBJECT_COUNT, LITERAL n)`, and a consumption-side filter re-reads a
-  post-mutation board. **No longer urgent** — 6a moved ahead of 1a, so this settles before the
-  *consumer chain* is written, not before 6a starts. Revert the broken stub now; decide later. (The
-  WIP branch at `evaluator.ts:113` has a `value: AmountExpression` field that recurses without ever
-  reading subjects; it is a placeholder, not a design.)
+- ~~**`SUBJECT_COUNT` shape**~~ — **SETTLED AND SHIPPED 2026-08-07.** The bare leaf
+  (`{ kind: "SUBJECT_COUNT" }` → `subjects.length`, **throws** when subjects are absent). A
+  consumption-side `filter?: CardFilter` was rejected: the subjects were already filtered by the
+  activation's `SubjectMatch`, and re-narrowing them at read time would evaluate against a
+  post-mutation board. Scaling is `MULTIPLY(SUBJECT_COUNT, LITERAL n)`. Note the throw is load-bearing
+  — `?? 0` would answer "none were carried" to a question that had no answer.
 
 # Known bugs, not blocking
 - **Deckout timing.** `emit` checks after EVERY signal and ends the game the moment a deck is empty,
@@ -689,6 +715,9 @@ requirement, and silently breaks *"if you have 15 or more cards in your trash"* 
 - Evaluator: `RANGE` AmountExpression throws; `base` flag ignored on COST/POWER/COUNTER filters.
 
 # Remaining backlog (each = new step-kind/gate + own tests)
+*Detail for the table in "What's left, in order" §3 — that section owns the ordering, this one owns
+the specifics.*
+
 Costs/payments (7 `EffectCost` kinds) → PAYMENT step, test the abort branch · targeting
 (`evalTargetExpression`, `CHOOSE_TARGETS`, TARGET binding) · `optional` decline + `oncePerTurn` ·
 remaining resolution ops (LOOK, REORDER, ADD_TO_HAND) · status effects subsystem (apply/read/expire,
