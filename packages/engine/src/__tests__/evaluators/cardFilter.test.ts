@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { produce } from "immer";
 import { evalCardFilter } from "../../evaluator";
 import { captureSnapshot } from "../../game/snapshot";
 import type {
@@ -170,17 +171,17 @@ describe("cost", () => {
     it("should return false if the kind is COST and the card is a DON card", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "COST", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "COST", op: ">=", value: 1 })).toBe(false);
     });
     it("should return false if the kind is COST and the card is a LEADER card", () => {
         const leader = makeLeaderInstance();
         const state = buildState([leader]);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, leader.instanceId), { kind: "COST", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, leader.instanceId), { kind: "COST", op: ">=", value: 1 })).toBe(false);
     });
     it("should read the card's own cost value (not power or counter)", () => {
         const { state, id } = singleChar({ cost: 1, power: 2, counter: 3 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 1, base: false })).toBe(true);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 2, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 1 })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 2 })).toBe(false);
     });
 });
 
@@ -188,22 +189,22 @@ describe("power", () => {
     it("should return false if the kind is POWER and the card is a DON card", () => {
         const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
         const state = buildState([don]);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "POWER", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, don.instanceId), { kind: "POWER", op: ">=", value: 1 })).toBe(false);
     });
     it("should return false if the kind is POWER and the card is an EVENT card", () => {
         const event = makeEventInstance();
         const state = buildState([event]);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, event.instanceId), { kind: "POWER", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, event.instanceId), { kind: "POWER", op: ">=", value: 1 })).toBe(false);
     });
     it("should return false if the kind is POWER and the card is a STAGE card", () => {
         const stage = makeStageInstance();
         const state = buildState([stage]);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, stage.instanceId), { kind: "POWER", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, stage.instanceId), { kind: "POWER", op: ">=", value: 1 })).toBe(false);
     });
     it("should read the card's own power value (not cost or counter)", () => {
         const { state, id } = singleChar({ cost: 1, power: 2, counter: 3 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "POWER", op: "==", value: 2, base: false })).toBe(true);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "POWER", op: "==", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "POWER", op: "==", value: 2 })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "POWER", op: "==", value: 1 })).toBe(false);
     });
 });
 
@@ -212,13 +213,13 @@ describe("counter", () => {
         const leader = makeLeaderInstance();
         const event = makeEventInstance();
         const state = buildState([leader, event]);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, leader.instanceId), { kind: "COUNTER", op: ">=", value: 1, base: false })).toBe(false);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, event.instanceId), { kind: "COUNTER", op: ">=", value: 1, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, leader.instanceId), { kind: "COUNTER", op: ">=", value: 1 })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, event.instanceId), { kind: "COUNTER", op: ">=", value: 1 })).toBe(false);
     });
     it("should read the card's own counter value (not cost or power)", () => {
         const { state, id } = singleChar({ cost: 1, power: 2, counter: 3 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COUNTER", op: "==", value: 3, base: false })).toBe(true);
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COUNTER", op: "==", value: 2, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COUNTER", op: "==", value: 3 })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COUNTER", op: "==", value: 2 })).toBe(false);
     });
 });
 
@@ -226,71 +227,71 @@ describe("counter", () => {
 describe(">=", () => {
     it("should return true when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">=", value: 3, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">=", value: 3 })).toBe(true);
     });
     it("should return true when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">=", value: 5, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">=", value: 5 })).toBe(true);
     });
     it("should return false when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">=", value: 7, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">=", value: 7 })).toBe(false);
     });
 });
 describe(">", () => {
     it("should return true when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">", value: 3, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">", value: 3 })).toBe(true);
     });
     it("should return false when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">", value: 7, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">", value: 7 })).toBe(false);
     });
     it("should return false when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">", value: 5, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: ">", value: 5 })).toBe(false);
     });
 });
 describe("<=", () => {
     it("should return true when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<=", value: 7, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<=", value: 7 })).toBe(true);
     });
     it("should return true when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<=", value: 5, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<=", value: 5 })).toBe(true);
     });
     it("should return false when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<=", value: 3, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<=", value: 3 })).toBe(false);
     });
 });
 describe("<", () => {
     it("should return true when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<", value: 7, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<", value: 7 })).toBe(true);
     });
     it("should return false when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<", value: 3, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<", value: 3 })).toBe(false);
     });
     it("should return false when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<", value: 5, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "<", value: 5 })).toBe(false);
     });
 });
 describe("=", () => {
     it("should return true when value is equal to the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 5, base: false })).toBe(true);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 5 })).toBe(true);
     });
     it("should return false when value is greater than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 3, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 3 })).toBe(false);
     });
     it("should return false when value is less than the specified value", () => {
         const { state, id } = singleChar({ cost: 5 });
-        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 7, base: false })).toBe(false);
+        expect(evalCardFilter(state, ctx(), captureSnapshot(state, id), { kind: "COST", op: "==", value: 7 })).toBe(false);
     });
 });
 
@@ -525,5 +526,60 @@ describe("not", () => {
         expect(evalCardFilter(state, ctx(), captureSnapshot(state, c.instanceId), {
             kind: "NOT", filter: { kind: "ANY" },
         })).toBe(false);
+    });
+});
+
+describe("computed vs base stats", () => {
+    // THE DISTINCTION THE SPLIT EXISTS FOR. Every other fixture in this file has no DON
+    // attached, so base and computed coincide and a stat filter passes whichever field
+    // it reads — which is precisely how the old `base` flag stayed wrong without a
+    // single test failing.
+    function charWithDon(): { state: GameState; id: CardInstanceId } {
+        const c = char({ cardId: "card-under-test", currentZone: "CHARACTERS" });
+        const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
+        const base = buildState([c, don], { "card-under-test": { power: 5000, cost: 4 } });
+        // calculatePower only counts attached DON for the turn player.
+        const state = produce(base, draft => {
+            (draft.instances[c.instanceId] as CharacterInstance).attachedDon = [don.instanceId];
+            draft.instances[don.instanceId].currentZone = null;
+            draft.turnPlayerId = SELF;
+        });
+        return { state, id: c.instanceId };
+    }
+
+    it("POWER reads the computed value, including attached DON", () => {
+        const { state, id } = charWithDon();
+        const snap = captureSnapshot(state, id);
+
+        expect(evalCardFilter(state, ctx(), snap, { kind: "POWER", op: "==", value: 5001 })).toBe(true);
+        expect(evalCardFilter(state, ctx(), snap, { kind: "POWER", op: "==", value: 5000 })).toBe(false);
+    });
+
+    it("BASE_POWER reads the printed value, ignoring attached DON", () => {
+        const { state, id } = charWithDon();
+        const snap = captureSnapshot(state, id);
+
+        expect(evalCardFilter(state, ctx(), snap, { kind: "BASE_POWER", op: "==", value: 5000 })).toBe(true);
+        expect(evalCardFilter(state, ctx(), snap, { kind: "BASE_POWER", op: "==", value: 5001 })).toBe(false);
+    });
+
+    // The pair a real card would use: "K.O. 1 Character with 5000 power or less" must
+    // fail against a buffed 5001 character, while a base-costed filter is unaffected.
+    it("the two disagree on the same card", () => {
+        const { state, id } = charWithDon();
+        const snap = captureSnapshot(state, id);
+
+        expect(evalCardFilter(state, ctx(), snap, { kind: "POWER", op: "<=", value: 5000 })).toBe(false);
+        expect(evalCardFilter(state, ctx(), snap, { kind: "BASE_POWER", op: "<=", value: 5000 })).toBe(true);
+    });
+
+    it("a stat the class does not have never matches, either form", () => {
+        const don = makeDonInstance({ currentZone: "DON_ACTIVE" });
+        const state = buildState([don]);
+        const snap = captureSnapshot(state, don.instanceId);
+
+        expect(evalCardFilter(state, ctx(), snap, { kind: "POWER", op: ">=", value: 0 })).toBe(false);
+        expect(evalCardFilter(state, ctx(), snap, { kind: "BASE_POWER", op: ">=", value: 0 })).toBe(false);
+        expect(evalCardFilter(state, ctx(), snap, { kind: "COUNTER", op: ">=", value: 0 })).toBe(false);
     });
 });

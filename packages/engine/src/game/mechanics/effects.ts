@@ -26,6 +26,7 @@ export function stageEffect(state: GameState, playerId: PlayerId, instanceId: Ca
         steps: effectDef.steps,
         subjects: subjects,
         cursor: 0,
+        selected: null,
         locals: {},
     };
     return produce(state, draft => {
@@ -63,6 +64,34 @@ export function promoteEffect(state: GameState, effectContext: EffectContext): G
         draft.effectQueue[0][playerId].splice(idx, 1);
         draft.currentEffect = effectContext;
     });
+}
+
+/**
+ * Resolve a CHOOSE_NEXT_EFFECT selection against the current frame. Returns the chosen
+ * effect, or a string saying why the selection is not available.
+ *
+ * ONE implementation for two callers with different error contracts — `validate`
+ * returns the string, `applyChooseNextEffect` throws it. They must agree exactly, or
+ * an action passes validation and then fails to apply.
+ *
+ * `index` is the key; the ids are a consistency check on top of it. That ordering
+ * matters: indexing alone would silently promote the wrong effect if a client sent a
+ * stale index, whereas the id comparison turns that into a rejection.
+ */
+export function selectQueuedEffect(
+    state: GameState,
+    playerId: PlayerId,
+    index: number,
+    instanceId: CardInstanceId,
+    effectId: EffectId,
+): EffectContext | string {
+    const frame = state.effectQueue[0]?.[playerId] ?? [];
+    const chosen = frame[index];
+    if (!chosen) return `No effect awaiting resolution at index ${index} for ${playerId}`;
+    if (chosen.instanceId !== instanceId || chosen.effectId !== effectId) {
+        return `Effect at index ${index} is ${chosen.effectId} on ${chosen.instanceId}, not ${effectId} on ${instanceId}`;
+    }
+    return chosen;
 }
 
 export function clearCurrentEffect(state: GameState): GameState {

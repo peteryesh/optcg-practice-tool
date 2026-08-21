@@ -1,14 +1,14 @@
 import type { CardInstanceId, PlayerId, Zone, Keyword, StackPosition, CardId, LifeOrientation, Phase } from './primitives';
 import type { GameSignal, SignalCause, SignalType } from './signal';
 import type { CardSnapshot } from './card';
-import type { CardFilter, BoardCondition, AmountExpression, TargetExpression } from './expression';
+import type { CardFilter, Condition, AmountExpression, TargetExpression } from './expression';
 
 export type EffectId = string;
 
 // Effect as it is stored on the database
 // Effect is stored on the definition as Record<EffectId, EffectDef>
 export type EffectDef = {
-    condition?: BoardCondition;
+    condition?: Condition;
     steps: EffectStep[];
     activation: SignalActivation[];
     activeZone: Zone;
@@ -31,7 +31,7 @@ export type EffectDef = {
  * that. Queued lives in `effectQueue`, running lives in `currentEffect`.
  */
 export type EffectContext = {
-    condition?: BoardCondition;
+    condition?: Condition;
     steps: EffectStep[];
     playerId: PlayerId;
     effectId: EffectId;
@@ -49,6 +49,7 @@ export type EffectContext = {
      */
     subjects: CardSnapshot[];
     cursor: number;
+    selected: CardInstanceId[] | null; // for steps that require player selection, store the selected cards here
     locals: Record<string, any>;
 }
 
@@ -68,7 +69,7 @@ interface BaseStep {
 // Requirement step preceding a payment step should check for the ability to pay the cost
 export interface RequirementStep extends BaseStep {
     kind: "REQUIREMENT";
-    requirement: BoardCondition;
+    requirement: Condition;
 }
 
 // Payment must always be preceded by requirement

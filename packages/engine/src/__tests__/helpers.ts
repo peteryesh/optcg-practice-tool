@@ -359,6 +359,9 @@ export function makeEffectContext(overrides: Partial<EffectContext> = {}): Effec
         // whose effect is not about its subjects. Override to assert on them.
         subjects: [],
         cursor: 0,
+        // null, not [] — no selection is running. `[]` would claim one is open
+        // before any step has executed.
+        selected: null,
         locals: {},
         steps: [],
         ...overrides,

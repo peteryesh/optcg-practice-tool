@@ -2,7 +2,7 @@ import type { GameState } from '../../types/state';
 import type { GameAction } from '../../types/action';
 import { InvalidActionError } from '../../errors';
 import { playCard, donAttach, declareAttack, declareBlocker, playCounter, sendTriggerToHand, sendTriggerToTrash, enterWhenAttackingPhase, enterEndOfTurnPhase, enterOnOpponentAttackPhase, enterCounterPhase, enterBattleResolutionPhase, enterBlockerPhase, enterRefreshPhase, enterMainPhase, resolveBattle, enterStartOfTurnPhase, displaceCard } from '../operations';
-import { getCardInstance, getZoneArray } from '../mechanics';
+import { getCardInstance, getZoneArray, promoteEffect, selectQueuedEffect } from '../mechanics';
 
 // Play card from hand
 export function applyPlayCard(state: GameState, action: Extract<GameAction, { type: "PLAY_CARD" }>): GameState {
@@ -70,4 +70,16 @@ export function applyNextPhase(state: GameState, action: Extract<GameAction, { t
         default:
             throw new InvalidActionError(`Cannot directly call pass state from phase ${state.phase}`);
     }
+}
+
+// The effect is already queued — staging and commitEffectFrame put it there. This
+// promotes the player's choice out of the frame and makes it current.
+//
+// The guard is unreachable through the reducer, which validates first with the same
+// helper, and is kept because this must not assume its only caller.
+export function applyChooseNextEffect(state: GameState, action: Extract<GameAction, { type: "CHOOSE_NEXT_EFFECT" }>): GameState {
+    const chosen = selectQueuedEffect(state, action.playerId, action.index, action.instanceId, action.effectId);
+    if (typeof chosen === "string") throw new InvalidActionError(chosen);
+    // Passes the object from the frame, not a copy — promoteEffect splices by identity.
+    return promoteEffect(state, chosen);
 }

@@ -1,7 +1,7 @@
 import { GameState, GameAction, PlayerId, DecisionPoint } from "./types";
 import { calculateCost, calculateCounter } from "./game/calculations";
 import { CardInstanceId, EffectId } from "./types";
-import { getCardDef, getCardInstance, getZoneArray } from "./game/mechanics";
+import { getCardDef, getCardInstance, getZoneArray, selectQueuedEffect } from "./game/mechanics";
 import { InvalidActionError } from "./errors";
 import { CHARACTERS_MAX, STAGE_MAX } from "./game/constants";
 
@@ -189,8 +189,13 @@ export function validate(state: GameState, action: GameAction): string | null {
         }
         case "ACTIVATE_EFFECT":
             return "Not yet implemented";
-        case "CHOOSE_NEXT_EFFECT":
-            return "Not yet implemented";
+        case "CHOOSE_NEXT_EFFECT": {
+            // Same helper the apply uses, so an action that validates cannot then fail
+            // to apply — the two error paths are one implementation.
+            const chosen = selectQueuedEffect(state, action.playerId, action.index, action.instanceId, action.effectId);
+            if (typeof chosen === "string") return chosen;
+            break;
+        }
         case "CHOOSE_TARGETS":
             return "Not yet implemented";
     }

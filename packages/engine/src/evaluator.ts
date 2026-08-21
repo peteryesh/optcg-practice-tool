@@ -10,7 +10,7 @@
 
 import { getZoneArray } from "./game/mechanics";
 import { captureSnapshot } from "./game/snapshot";
-import { CardFilter, CardDef, CardSnapshot, EvalContext, GameState, PlayerId, BoardCondition, AmountExpression } from "./types";
+import { CardFilter, CardDef, CardSnapshot, ComparisonOp, EvalContext, GameState, PlayerId, Condition, AmountExpression } from "./types";
 
 /**
  * Evaluate a filter against a card AS OF SOME INSTANT.
@@ -50,23 +50,15 @@ export function evalCardFilter(state: GameState, evalContext: EvalContext, candi
         }
         case "CLASS":
             return candidate.class === filter.cardClass;
-        // NOTE: the three stat filters still read the BASE value and ignore their
-        // `base` flag — pre-existing behaviour, tracked in EFFECT_PLAN.md's known
-        // bugs. The snapshot now carries both forms, so wiring the flag up is a
-        // one-line change per branch whenever that is picked up.
-        case "COST": {
-            if (candidate.baseCost === null) return false;
-            return compare(filter.op, candidate.baseCost, filter.value);
-        }
-        case "POWER": {
-            if (candidate.basePower === null) return false;
-            return compare(filter.op, candidate.basePower, filter.value);
-        }
-        case "COUNTER": {
-            if (candidate.class !== "CHARACTER") return false;
-            if (candidate.baseCounter === null) return false;
-            return compare(filter.op, candidate.baseCounter, filter.value);
-        }
+        // Each stat maps to exactly one snapshot field. A null means the class has no
+        // such stat — a DON has no counter, an event no power — and never matches, which
+        // subsumes the class checks these branches used to carry.
+        case "COST":         return compareStat(candidate.cost, filter);
+        case "BASE_COST":    return compareStat(candidate.baseCost, filter);
+        case "POWER":        return compareStat(candidate.power, filter);
+        case "BASE_POWER":   return compareStat(candidate.basePower, filter);
+        case "COUNTER":      return compareStat(candidate.counter, filter);
+        case "BASE_COUNTER": return compareStat(candidate.baseCounter, filter);
         case "COLOR": {
             const def = defOf(state, candidate);
             if (def === null) return false;
@@ -140,8 +132,46 @@ export function evalAmountExpression(state: GameState, evalContext: EvalContext,
     }
 }
 
+/**
+ * Evaluate a boolean expression.
+ *
+ * Nothing here reads the game — every question about state is asked through
+ * `evalAmountExpression`, and the two leaves it has (`COUNT`, `SUBJECT_COUNT`) are what
+ * determine the reach. Widening what a condition can ask means adding an amount leaf,
+ * not a member here.
+ *
+ * That also means this inherits the amount evaluator's failure modes: a `SUBJECT_COUNT`
+ * inside a condition throws when there is no activating signal in scope, rather than
+ * quietly comparing against 0.
+ */
+export function evalCondition(state: GameState, evalContext: EvalContext, condition: Condition): boolean {
+    switch (condition.kind) {
+        // Vacuous cases match CardFilter's AND/OR: an empty AND is true, an empty OR is
+        // false. Both fall out of every/some rather than being special-cased.
+        case "AND":
+            return condition.conditions.every(c => evalCondition(state, evalContext, c));
+        case "OR":
+            return condition.conditions.some(c => evalCondition(state, evalContext, c));
+        case "NOT":
+            return !evalCondition(state, evalContext, condition.condition);
+        case "COMPARE":
+            return compare(
+                condition.op,
+                evalAmountExpression(state, evalContext, condition.left),
+                evalAmountExpression(state, evalContext, condition.right),
+            );
+    }
+}
+
+// A stat the snapshot does not carry never matches — null means "this class has no such
+// stat", which is a different thing from "zero" and must not compare as one.
+function compareStat(value: number | null, filter: { op: ComparisonOp; value: number }): boolean {
+    if (value === null) return false;
+    return compare(filter.op, value, filter.value);
+}
+
 // Left is candidate, right is filter value
-function compare(op: ">=" | "<=" | "==" | ">" | "<", left: number, right: number): boolean {
+function compare(op: ComparisonOp, left: number, right: number): boolean {
     switch (op) {
         case ">=":
             return left >= right;

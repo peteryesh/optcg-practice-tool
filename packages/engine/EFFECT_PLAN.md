@@ -1,31 +1,36 @@
 # Effect system build plan
 
-## Where things stand — 2026-08-08
+## Where things stand — 2026-08-16
 
-**276 pass / 0 fail. Engine typechecks clean.** Verified against the code, not inferred.
+**284 pass / 0 fail. Engine typechecks clean.** Verified against the code, not inferred.
 
 Working end to end:
 
 - **The On-Play draw slice.** `reducer(state, PLAY_CARD)` runs staging → commit → promotion →
   `advanceEffect` → `executeResolution` → `cardsDraw` → `MAIN_ACTION` in one call. Two real cards
-  (`OP04-045` King, `OP13-041` Izo) in `src/cards/`, tested against the real registry.
-- **The subject channel** (milestone 1, complete). Snapshots captured pre-mutation, carried on the
-  signal, filtered by `SubjectMatch`, stored on the `EffectContext`, read by `SUBJECT_COUNT`.
-  `subjectCount.test.ts` exercises the whole chain on one hypothetical card.
-- **Two-tier activation** (1b). `SignalPredicates` then `SubjectMatch`, with `selectSubjects` owning
-  the `null` / `[]` / non-empty contract. Phase-keyed effects stage.
+  (`OP04-045`, `OP13-041`) in `src/cards/`, tested against the real registry.
+- **The subject channel** (milestone 1). Snapshots captured pre-mutation, carried on the signal,
+  filtered by `SubjectMatch`, stored on the `EffectContext`, read by `SUBJECT_COUNT`.
+- **Two-tier activation** (1b). `SignalPredicates` then `SubjectMatch`, `selectSubjects` owning the
+  `null` / `[]` / non-empty contract. Phase-keyed effects stage.
+- **Effect ordering** (milestone 4). `CHOOSE_NEXT_EFFECT` carries `(index, instanceId, effectId)`;
+  `selectQueuedEffect` is shared by `validate` and the apply so a valid action cannot fail to apply.
+  `effectOrder.test.ts` verified to bite — mutating the index lookup fails 6 of its 8 tests.
+- **The corpus survey** (milestone 3). ~78 atoms over 2,316 effect-bearing cards; see "Corpus survey"
+  below. It has already settled one live design question and reordered the roadmap.
 
 Still stubbed, confirmed by grep:
 
 | what | where |
 |---|---|
-| `CHOOSE_NEXT_EFFECT`, `CHOOSE_TARGETS` throw | `reducer.ts:80,82` + validator + actionGen |
-| `ACTIVATE_EFFECT` throws | `game/actions/main.ts:57` |
+| `CHOOSE_TARGETS` throws | `reducer.ts:84` |
+| `ACTIVATE_EFFECT` throws; `genActivateEffect` is an empty function | `game/actions/main.ts:57` |
 | `REQUIREMENT` / `PAYMENT` steps throw | `game/effects/stepper.ts:32` |
-| `LOOK` / `ADD_TO_HAND` / `REORDER` throw; no K.O. op exists at all | `game/effects/resolution.ts:48` |
-| `evalBoardCondition`, `evalTargetExpression` — **do not exist** | so `def.condition` is never read |
+| `LOOK` / `ADD_TO_HAND` / `REORDER` throw | `game/effects/resolution.ts:48` |
+| no `REST` / `KO` / `TRASH` operation exists at all | `EffectOperation` has 4 members |
+| `evalTargetExpression`, `evalBoardCondition` — **do not exist** | so `def.condition` is never read |
 | `oncePerTurn`, `optional` | never read |
-| Blocker | `validator.ts:148` |
+| `SUBMIT_REORDER` has no reducer case | generated + validated, then silently no-ops |
 
 ---
 
@@ -33,67 +38,112 @@ Still stubbed, confirmed by grep:
 
 **This section is the roadmap. Everything below it is rationale.**
 
-## 1. Milestone 4 — two effects coexisting *(FORCED NEXT)*
+## The ladder — one axis, one rung at a time
 
-The only item that breaks a real game rather than merely limiting it. Two effects staging off one
-signal sets `RESOLVE_EFFECT_ORDER`, which no action can answer, and the game **deadlocks**. The
-phase-keyed battle design walks straight into it, since "on opponent's attack" queues every listener
-into one frame.
+Each rung ships an authorable card shape and adds one thing to a loop that already works. The order
+follows the survey's own recommendation: body primitives by frequency first, combinators second.
 
-Needs the composite `(instanceId, effectId)` key on `CHOOSE_NEXT_EFFECT`. The *internal* half of the
-identity bug is already gone — `promoteEffect` splices by object identity since `EffectRef` was
-collapsed — so what remains is the player-facing selection path.
-
-## 2. Milestone 3 — the corpus survey
-
-Its explicit job is to decide the order of everything below, and right now that order is guesswork.
-2,631 cards with `raw_effect` are sitting in the database waiting to be clustered by ability keyword
-and verb. Worth doing *before* committing to the expensive items, not after.
-
-## 3. The rest of the skeleton
-
-Ordered by best current guess; milestone 3 supersedes this.
-
-| | what it needs | notes |
+| rung | ships | new machinery |
 |---|---|---|
-| **Conditions** (m5) | `evalBoardCondition`, wire `def.condition` at resolution | Cheapest of the four, unblocks "draw 1 if you have 8+ DON". `BoardCondition.ZONE_SIZE` must be **replaced** by a compare leaf over two `AmountExpression`s — it has no operator and no controller scoping. **Delete** the commented stub at `emitter.ts:50`; it is in the wrong place |
-| **Targeting** | `evalTargetExpression`, `CHOOSE_TARGETS`, the DecisionPoint projection | Biggest single piece. Most cards need it. Blocks payments |
-| **Payments** | `PAYMENT` step, 7 `EffectCost` kinds, the abort branch | **Depends on targeting** — `EffectCost.target` is a `TargetExpression`. Makes the battle-abandonment rule reachable |
-| **Requirements** | `REQUIREMENT` step | Depends on conditions |
-| **Resolution ops** | `LOOK`, `ADD_TO_HAND`, `REORDER`, and a K.O. op | Each is its own gate + tests |
-| **`oncePerTurn` / `optional`** | the consumption boundary | invariant 3 |
-| **ChoiceStep** | `goto` + labels | the modal keystone |
-| **Status effects** | apply / read / expire, wired into power/cost/counter calc | also unblocks the `base` flag work |
+| 1 | `DRAW` | ✅ done |
+| **2** | **"Rest all opponent Characters"** | `evalTargetExpression` (SELECTOR + SELF only), `REST`/`KO`/`TRASH` operations with inline `target` |
+| 3 | "K.O. 1 opponent Character" | `EFFECT_TARGET` payload, the stepper pause rule, `CHOOSE_TARGET` through gen/validate/apply/reducer, `isForced` |
+| 4 | "Trash 2 cards from hand" | accumulation — the loop actually loops; canonical ordering stops being vacuous |
+| 5 | "Trash up to 2 cards" | `min: 0`, the stop action, `stopAllowed` |
+| 6 | "Trash Characters totalling cost 4" | `CardStatType` weighting, `isForced` weighted branch |
+| 7 | `LOOK` + `REORDER` | the `look` zone flow, plus the missing `SUBMIT_REORDER` reducer case |
 
-## 4. Independent — slot in anytime
+**Rung 2 is next.** Every operation it needs already exists (`cardsSetRested`, `removeCardsFromField`,
+`_cardsMoveToTrash`) — it is adapter work in `executeResolution`, not new game logic. One wrinkle: those
+operations take a `playerId` and validate ids against *that player's* zone, so a target set spanning
+both boards must be grouped by `getCardInstance(state, id).controller` and applied per group.
 
-- **`tsconfig.json` for `packages/engine`.** Tests are **never typechecked** today: the engine has no
-  tsconfig and `apps/sleapy-web` includes only its own `src`, so engine source is checked transitively
-  while `__tests__` is checked by nothing. Two conditional types in a test helper silently resolved to
-  `never` and nothing complained. Will likely surface existing errors, so give it its own change.
-- **Battle abandonment guard** — rule settled and written up below, not built. Two holes:
-  `conductor.ts` `BLOCKER` case's non-null assertion, and `resolveBattle`'s class-only "corrupt" check
-  that a trashed character passes.
-- **`base` flag on stat filters** — snapshots carry both forms now, so it is one line per branch.
-- **Rename `activate` → `invoke`** (`EFFECT_ACTIVATED`→`EFFECT_INVOKED`, `ACTIVATE_EFFECT`→
-  `INVOKE_EFFECT`). Never "trigger".
-- **Milestone 2** — playing into a full character zone routes `CHARACTER_PLAYED` through
-  `displaceCard` rather than `playCharacter`. Untested path, ordinary mid-game state.
-- **Rename `EffectContext` → `ActivatedEffect`**, optional. "Context" does no work; the type now spans
-  activation through completion. Touches the stepper, `evalContextOf`, `currentEffect` — belongs with
-  milestone 4 if it happens at all.
+**`locals` is not needed until rung 7 or later.** A paused selection lives in `EffectContext.selected`;
+the operation reads it directly on resume. The binding channel (`EffectValue`, `bind`/`REF`) is only
+required when a selection must outlive its own step — cross-step references like *"K.O. 1 Character. If
+you do, draw 1"* (`PriorActionResolved`, 28 cards).
 
-## 5. Dropped, not deferred
+## Parallel axis — status effects, and it is the bigger one
 
-- **Roles / a third activation arm.** Combat is phase-keyed by decision (2026-08-07): "when attacking"
-  and "on opponent's attack" watch a `BattlePhase` and read `state.currentBattle` at resolution. Add
-  the arm only if a real card proves it necessary.
-- **The remaining signal migration.** Nothing left to convert. Combat never converts; DON converts
-  only if a card needs it. `selectSubjects`' throw is a permanent design assertion, **not** a tracker.
-- **6b prevention / replacement.** Off the table until the rest lands — a cancelled operation has to
-  unwind into whatever invoked it, and that is not worth opening now.
+The ladder above is the **targeting** axis. The survey's second-largest atom is `+Power` at 427, and
+**status-with-duration is 1,162 cards** across 9 duration atoms (`ThisTurn` 447, `ThisBattle` 191).
+None of that machinery exists, and no rung above gets closer to it.
+
+`Rest` is an operation (a permanent state change until refresh); `+Power ThisTurn` is a status. Do not
+let the second hide behind the first.
+
+## Then, by survey frequency
+
+| | cards | notes |
+|---|---|---|
+| **Invoked abilities** | ~635 (`Activate: Main` 363 + `Main` 272) | `ACTIVATE_EFFECT` throws, `genActivateEffect` is empty. Bigger than it looks |
+| **`oncePerTurn`** | 290 | Storage and reset already wired; only the mark and the gate are missing. Needs the consumption boundary (invariant 3), and the gate has two homes — `genActivateEffect` and the staging gate — which must share one predicate |
+| **Payments** | 599 optional costs | Depends on targeting: `EffectCost.target` is a `TargetExpression` |
+| **Conditions** (m5) | `LeaderTrait` 245 is the single most common body condition | `evalBoardCondition` + wiring `def.condition` at resolution. `ZONE_SIZE` must be **replaced** by a compare leaf over two `AmountExpression`s. **Delete** the commented stub at `emitter.ts:50` — wrong place |
+| **ChoiceStep** | 14 (`Modal(ChooseOne)`) | The modal keystone, and the reason optional payment stays a flag rather than a branch |
+
+## Independent — slot in anytime
+
+- **`tsconfig.json` for `packages/engine`.** Tests are **never typechecked**: the engine has no
+  tsconfig and `apps/sleapy-web` includes only its own `src`. This has now bitten twice — two
+  conditional types silently resolving to `never`, and `makeEffectContext` shipping without a required
+  field. Will surface existing errors, so give it its own change.
+- **`assertNever` on the reducer switch.** `SUBMIT_REORDER` is generated and validated but has no
+  reducer case, so it falls through and silently does nothing. Latent only because no `REORDER`
+  decision point is ever set — live the moment `LOOK` lands. Two lines catch it and every future gap.
+- **Delete `RANGE`** from `AmountExpression`. Dead: it throws in the evaluator, and its purpose
+  (a range as one amount) is now served by `min` + `capacity` as separate fields.
+- **`lit()` in `src/cards/authoring.ts`** — `{ kind: "LITERAL", value: n }` is spelled out inline in
+  both authored cards. Wrap stable leaves only; a helper over a shape still in flux would absorb the
+  compile errors that hand-written TS exists to surface.
+- **Battle abandonment guard** — rule settled below, not built. Two holes: `conductor.ts`'s `BLOCKER`
+  non-null assertion, and `resolveBattle`'s class-only "corrupt" check that a trashed character passes.
+- **`base` flag on stat filters** — snapshots carry both forms, one line per branch.
+- **Rename `activate` → `invoke`**; never "trigger".
+- **Milestone 2** — playing into a full character zone routes through `displaceCard`. Untested path.
+- **Rename `EffectContext` → `ActivatedEffect`**, optional.
+
+## Dropped, not deferred
+
+- **Roles / a third activation arm.** Combat is phase-keyed by decision. The survey backs this: 308
+  battle-keyed cards, so it is a major cluster served by phases rather than a corner case papered over.
+- **The remaining signal migration.** Nothing left to convert. `selectSubjects`' throw is a permanent
+  design assertion, **not** a tracker.
+- **6b prevention / replacement** — 72 cards, the smallest axis and the hardest to build.
 
 ---
+
+# Corpus survey — milestone 3, 2026-08-16
+
+**2,631 cards; 2,316 with effect text; 315 vanilla.** ~78 atoms across six axes. **97.7% of
+effect-bearing cards are fully expressible in this vocabulary; 54 need a new primitive** — that
+near-closure is what de-risks the data-driven DSL bet.
+
+Top atoms by cards-in-which-they-appear:
+
+- **Signals** — `On Play` 848 · `Activate: Main` 363 · `Main` 272 · `When Attacking` 246 · `Counter`
+  184 · `On K.O.` 154 · `End of Your Turn` 50 · `On Opponent's Attack` 48 · `Trigger` 24 · `On Block` 14
+- **Body actions** — `Rest` 609 · `+Power` 427 · `KO` 412 · `DeckPlacement` 399 · `Trash` 348 ·
+  `Draw` 281 · `LifeManipulation` 247 · `AddToHand` 233 · `PlayCard` 228 · `RevealFromDeck` 210 ·
+  `LookTopN` 204 · `SetActive` 180 · `GrantKeyword` 146 · `-Power` 132 · `Modal(ChooseOne)` 14
+- **Costs** — `TrashFromHand` 184 · `ReturnDON` 158 · `RestSelf` 122 · `RestDON` 102 · `TrashSelf` 59.
+  **599 costs are optional (`You may …`); 290 effects are `[Once Per Turn]`**
+- **Body conditions** — `LeaderTrait` 245 · `Opponent-state` 142 · `BoardState(self)` 92 · `DON-state`
+  82 · `LifeCount` 80 · `LeaderName` 62
+- **Durations** — `ThisTurn` 447 · `ThisBattle` 191 · `PlayedTurnAttack` 66 · six more
+- **Keywords** — `Blocker` 352 · `Rush` 86 · `Double Attack` 32 · `Banish` 22
+- **Framework rollup** — Signal 2,024 · Status 1,162 · Replacement 72
+
+**What it settled immediately:** optional payment stays a **flag** (`PaymentStep.optional`) rather
+than becoming a two-branch `ChoiceStep` — 599 cards against 14 modal ones, and forcing six hundred
+cards through labelled branches with explicit gotos and correctly-chosen terminals to share a
+mechanism with fourteen is the wrong trade.
+
+**What it reprioritised:** `oncePerTurn` from a late item to 290 cards · status/durations from the
+bottom of a table to the largest unbuilt subsystem · invoked abilities from an afterthought to ~635
+cards · battle-keyed effects confirmed as a major cluster, validating the phase-keyed decision ·
+replacement confirmed as the smallest axis, justifying 6b's deferral.
+
 
 # Shipped — 2026-08-07
 
@@ -241,21 +291,37 @@ Cost of waiting: phase-keyed effects stay blocked until 6a lands. Accepted.
 routes `CHARACTER_PLAYED` through `displaceCard` rather than `playCharacter`, after a removal. A full
 board is an ordinary mid-game state.
 
-## 3. Let the language be shaped by the cards, not one card at a time
+## 3. Let the language be shaped by the cards — **COMPLETE, 2026-08-16**
 
-**Why:** every card examined so far has forced a language change, and that continues as long as
-requirements arrive one card at a time. Survey the 2,631-card corpus (`raw_effect` on every row):
-cluster by ability keyword, verb, and what each construct needs. Converts reactive design into
-informed design.
+**Why:** every card examined had forced a language change, and that continues as long as requirements
+arrive one card at a time. Survey the corpus, cluster by keyword and verb, convert reactive design
+into informed design.
 
-**This decides the order of 4–7.** Whichever covers the most real cards goes next; right now that is
-guesswork.
+**Done.** Results and consequences under "Corpus survey" near the top. It paid off immediately by
+settling optional-payment-as-a-flag (599 cards vs 14) — the first time a design question was answered
+by counting rather than by argument — and it reordered the roadmap around `oncePerTurn` (290),
+invoked abilities (~635) and status/durations (1,162).
 
-## 4. Let two effects coexist
+## 4. Let two effects coexist — **COMPLETE, 2026-08-16**
 
-**Why:** two cards watching one signal is an ordinary board and currently **hard-stops the game** —
-the conductor sets `RESOLVE_EFFECT_ORDER`, and `CHOOSE_NEXT_EFFECT` throws "not yet implemented" in
-validator/reducer/actionGen. Most likely thing to break a real playtest.
+**Why:** two cards watching one signal is an ordinary board and used to **hard-stop the game** — the
+conductor sets `RESOLVE_EFFECT_ORDER`, and `CHOOSE_NEXT_EFFECT` threw in validator/reducer/actionGen.
+
+**Shipped.** `CHOOSE_NEXT_EFFECT` carries `(index, instanceId, effectId)`. `index` is the key because
+`(instanceId, effectId)` is **not unique** — one effect stages twice in a frame when it listens for two
+signals that both fire during one action, and those contexts carry different subjects, so they do not
+resolve identically. The ids ride alongside as a consistency check, turning a stale index into a loud
+rejection rather than a silent wrong pick. `selectQueuedEffect` in `mechanics/effects.ts` is the single
+implementation shared by `validate` (returns the string) and the apply (throws it), so an action that
+validates cannot fail to apply.
+
+`effectOrder.test.ts` — 8 tests, most of which never name a field on the action: they take actions
+from `getLegalActions` and hand them back to `reducer`, so they survive further shape changes.
+Resolution order is read from `gameLog` via `cause.sourceId`, because with only `DRAW` implemented the
+final board is identical whichever order ran. Verified to bite: mutating the lookup to ignore the index
+fails 6 of 8.
+
+Also the first test file to call `getLegalActions` at all — previously exercised by zero tests.
 
 ~~Forces the **EffectRef identity bug**~~ — **half fixed 2026-08-07 by collapsing `EffectRef` into
 `EffectContext`.** `promoteEffect` no longer matches on `instanceId`; the queued object IS the object
@@ -568,6 +634,90 @@ base stats (DON already detached). The fix is the same capture used everywhere e
 for anything computed, ids only for identity. NOT built: no card currently reads a battle
 participant's computed stats in that window. Build it when one does.
 
+## Targeting (2026-08-16)
+
+- **Selection resolves a BINDING, not the effect.** Selection populates a slot; a later mutating step
+  consumes it. Selection is **trigger-inert** — signals fire only on application, never during picking.
+- **Targeting is an OPERATION, not a phase.** `Select` is the missing *producer* of the binding that
+  Move/Orient/Modify/Grant consume. Both Payment and Resolution invoke the same machinery; what
+  differs is the enclosing phase's failure contract, never the mechanism. **No "is this a cost?" flag
+  on targeting** — the phase location already encodes it.
+- **The load-bearing invariant: Requirement gates, Payment rewinds, Resolution absorbs.** Payment and
+  Resolution share the whole operation vocabulary and differ only in what happens when a step cannot
+  complete. Cost execution belongs in Payment; `PaymentStep.cost` already puts it there, and what was
+  actually missing is `Select` — a *targeted* cost has nowhere to resolve its target under the abort
+  contract.
+- **Kill Requirement/Payment drift by deletion, not validation.** Derive the can-I-pay check from
+  Payment's own `TargetExpression`, read in feasibility mode for the gate and selection mode for the
+  pick. One filter, two invocation points. Do **not** build an equivalence validator — proving two
+  filter expressions equivalent is a theorem-prover trap. Residual safety is a harness assertion.
+- **One budgeted-selection primitive, never subset enumeration.** A running budget draws down per pick;
+  re-derive the filter against what remains; auto-terminate when nothing fits. "Up to N" is the
+  degenerate case where every pick weighs 1, so counts and sum-constraints are ONE primitive (DON
+  attachment is the same primitive again).
+- **`capacity` / `weight`, not `budget` / `unitCost`.** `capacity` replaces `max` rather than sitting
+  beside it, so `min` and `capacity` are the floor and ceiling of one quantity. `unitCost` was rejected
+  outright: the codebase already has three `cost`s (`CardDef.cost`, `calculateCost`, `EffectCost`).
+  Note `min` is in capacity units, so mixed-unit constraints ("at least 2 picks, at most 4 cost") need
+  a `limits: []` generalization that is **not** built.
+- **`optional` is DERIVED from `min`, not stored.** `stopAllowed = accumulated >= min ||
+  noCandidatesFit` — the `optional` term drops out entirely, because `min: 0` is already true at zero
+  picks. This must NOT absorb `PaymentStep.optional`, which is the different question "may I skip this
+  entirely" and stays a flag.
+- **`min` and `capacity` are REQUIRED; `weight` and `chooser` optional.** The rule: required when the
+  default is dangerous, optional when the default is the common and safe reading. A missing `min`
+  silently turns "choose 2" into "up to 2"; a missing `weight` gives count semantics, which is the
+  majority. Neither needs `null` — unbounded capacity is `COUNT` over the same zones/filter, which is
+  exact and adds no state.
+- **`chooser` is orthogonal to the filter.** It decides who answers; it must NOT change
+  `EvalContext.self`. "You choose 2 of your opponent's Characters" and "your opponent chooses 2 of
+  their own" share a filter and differ only in `chooser`. Flipping `self` would invert the second.
+  Needs an opponent-derivation helper, which does not exist — filters only ever test inequality.
+- **PROMPT IFF THERE IS AT LEAST ONE LEGAL PICK.** No legal picks → complete immediately with whatever
+  accumulated. Forced selections auto-resolve: `candidates.length <= (min - accumulated)` → take all
+  and complete. This is one rule, not two — fizzle-at-zero is its `stillNeeded <= 0` corner, and the
+  "you picked 2 of 2, confirm?" prompt disappears without a special case.
+- **Auto-resolve is safe exactly when the outcome is UNIQUE.** That is what makes it costless to leave
+  out of the log: replay re-derives the same set because there was nothing to choose. Auto-resolving a
+  genuine choice would lose real information.
+- **`ChoiceStep` must NOT inherit that shortcut.** "Take top or bottom of life" with one life card has
+  a unique *card* but two distinguishable *labels*, and a later effect can read which was chosen.
+  Outcomes must be unique in everything observable, not just in which cards moved. Collapsing
+  single-option decisions uniformly is exactly the generalization to avoid.
+- **Loop state lives on `EffectContext.selected`, NOT in `locals`.** `locals` is the program's
+  variables (author-named, author-read); this is the interpreter's bookkeeping. Merging them is how the
+  frame becomes a junk drawer. It stores **only the picked ids** — remaining capacity, min, weight,
+  chooser and the bind name are all derivable from `steps[cursor]`, which is guaranteed to be the right
+  step because the cursor does not advance while a selection is open. `null` vs `[]` is load-bearing:
+  `null` = no selection running, `[]` = one running with nothing picked yet.
+- **The pause rule: a step that set a `decisionPoint` has not completed.** Don't advance the cursor.
+  Generalizes to `PAYMENT` for free, and keeps the stepper ignorant of selection specifics.
+- **Feasibility-aware filtering makes "2 or none" emergent**, not a coded mode — offer a pick only if a
+  legal completion is still reachable. Bounded yes/no search, never a materialized powerset. Stubbed
+  as always-true, which is correct for every cap-type constraint. **The stub has an expiry condition:**
+  the moment a "cannot be K.O.'d" card is authored it starts offering unpayable costs, because
+  feasibility for a *cost* must ask "would this removal actually go through", not just "does a legal
+  completion exist".
+- **Two kinds of protection, only one is a filter concern.** "Cannot be *chosen*" is a targeting
+  restriction and lives in the filter. "Cannot be *K.O.'d*" is a replacement — the card is offered,
+  selected and bound, and the removal is cancelled at application. Do not conflate them.
+- **Replacement application is TWO-PHASE and order-independent.** A replacement applies only if its
+  source is not itself in the removal set. Phase 1 resolve the binding; phase 2 eliminate replacements
+  whose sources are in it; phase 3 apply to the survivors. A naive sequential loop makes the outcome
+  depend on processing order — a protector processed late fires from beyond the grave. Costs for
+  surviving replacements are offered in phase 2, never before, so a doomed protector is not asked to
+  pay. **Consequence: consuming operations must take the WHOLE binding**, never iterate one card at a
+  time — a per-card loop cannot express phase 2 at all. Open hole: mutual protection (A protects B, B
+  protects A, both in the set) is a fixed point, not a predicate; needs a stated tiebreak.
+- **Canonical ordering** (each pick's id exceeds the prior) collapses permutation redundancy to one
+  path per subset. Sound *because* selection order never reaches application — phase 1 produces a set.
+  Note there is no Zobrist/transposition table in the engine today; the stated payoff is forward-looking.
+- **Client batching is UX staging over incremental engine actions.** The client keeps a provisional
+  pick list, projects visuals from `(true state, picks)`, and on commit dispatches picks **one at a
+  time** exactly as a self-play harness would. The engine's vocabulary has no batch action. Derived
+  values refold from the list, so deselect needs no unwinding — the engine's `selected` matches that
+  shape deliberately, or the two halves would disagree about what is authoritative.
+
 ## Structural
 - **Operations never name a player.** No `EffectOperation`/`EffectCost` carries a PlayerId. Who acts
   derives from expressions: `EvalContext.self` = controller of the activating card. `DRAW` draws for
@@ -712,7 +862,16 @@ requirement, and silently breaks *"if you have 15 or more cards in your trash"* 
   Silent, because the `Card` type mis-declares the remote shape. `name`/`types` stay as printed.
 - **`cost: null` vs `undefined`** — leaders come back with `null` where `CardDef` declares
   `cost?: number`. Check `calculateCost`.
-- Evaluator: `RANGE` AmountExpression throws; `base` flag ignored on COST/POWER/COUNTER filters.
+- Evaluator: `base` flag ignored on COST/POWER/COUNTER filters — snapshots now carry both forms, so
+  it is one line per branch.
+- ~~`RANGE` AmountExpression throws~~ — **now dead, delete it.** `min` + `capacity` as separate fields
+  on `PLAYER_CHOICE_TARGET` replaced its only purpose. Leaving a throwing member in the union invites
+  someone to reach for it.
+- **`SUBMIT_REORDER` has no reducer case.** It is in `GameAction`, in `validActions[REORDER]`, has a
+  validator case with a permutation check, and is generated by `genChooseReorder` — but the reducer
+  switch has no arm for it and no `default`, so it falls through, applies nothing, and the decision
+  point is consumed anyway. Latent only because no `REORDER` decision point is ever set. Live the
+  moment `LOOK` lands.
 
 # Remaining backlog (each = new step-kind/gate + own tests)
 *Detail for the table in "What's left, in order" §3 — that section owns the ordering, this one owns

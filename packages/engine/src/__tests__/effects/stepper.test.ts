@@ -164,7 +164,11 @@ describe("advanceEffect", () => {
     it("throws for a REQUIREMENT step", () => {
         const { state } = boardMidEffect([{
             kind: "REQUIREMENT",
-            requirement: { kind: "ZONE_SIZE", zones: ["HAND"], amount: { kind: "LITERAL", value: 1 } },
+            requirement: {
+                kind: "COMPARE", op: ">=",
+                left: { kind: "COUNT", zones: ["HAND"], filter: { kind: "CONTROLLER", controller: "SELF" } },
+                right: { kind: "LITERAL", value: 1 },
+            },
         }]);
 
         expect(() => advanceEffect(state)).toThrow();

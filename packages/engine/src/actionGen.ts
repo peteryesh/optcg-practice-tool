@@ -95,8 +95,24 @@ const genActivateEffect: ActionGenerator = (state, dp, out) => {
     // check for effects that can be activated
 }
 
+// Offer every effect the player has waiting in the CURRENT frame — never the next
+// one. A frame is "everything that activated at the same time", so frame N must drain
+// completely before frame N+1 is choosable.
+//
+// Two entries can look identical (same card, same effect, staged off two signals) and
+// still resolve differently, because they carry different subjects. `index` is what
+// makes the second one reachable.
 const genChooseNextEffect: ActionGenerator = (state, dp, out) => {
-    // find the player's next effects in the current or next frame
+    const frame = state.effectQueue[0]?.[dp.player] ?? [];
+    frame.forEach((effect, index) => {
+        out.push({
+            type: "CHOOSE_NEXT_EFFECT",
+            playerId: dp.player,
+            index,
+            instanceId: effect.instanceId,
+            effectId: effect.effectId,
+        });
+    });
 }
 
 const genChooseTargets: ActionGenerator = (state, dp, out) => {
